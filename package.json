@@ -1,0 +1,31 @@
+{
+    "name": "route-map-app-express",
+    "version": "1.0.0",
+    "description": "Minimum Route Map Application with Express",
+    "main": "html_server_ver6.1.js",
+    "scripts": {
+        "start": "node html_server_ver6.1.js",
+        "dev": "nodemon html_server_ver6.1.js",
+        "test": "echo \"Error: no test specified\" && exit 1",
+        "build:css": "tailwindcss -i ./src/globals.css -o ./dist/output.css --watch"
+    },
+    "dependencies": {
+        "express": "^4.18.2",
+        "cors": "^2.8.5"
+    },
+    "devDependencies": {
+        "nodemon": "^3.0.1"
+    },
+    "engines": {
+        "node": ">=16.0.0"
+    },
+    "keywords": [
+        "route",
+        "map",
+        "geojson",
+        "leaflet",
+        "express"
+    ],
+    "author": "",
+    "license": "ISC"
+}

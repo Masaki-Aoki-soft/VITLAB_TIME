@@ -1,0 +1,26 @@
+services:
+  map-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: minimum-route-map
+    ports:
+      - "8081:8081"
+    volumes:
+      # データファイルやGeoJSONファイルをマウント
+      - ./oomiya_line:/app/oomiya_line
+      - ./oomiya_point:/app/oomiya_point
+      - ./RE_AREA.geojson:/app/RE_AREA.geojson
+      - ./oomiya_route_inf_4.csv:/app/oomiya_route_inf_4.csv
+      - ./result2.txt:/app/result2.txt
+      - ./signal.txt:/app/signal.txt
+      - ./saving_route:/app/saving_route
+    environment:
+      - NODE_ENV=production
+      - LD_LIBRARY_PATH=/lib:/usr/lib:/usr/local/lib
+    restart: unless-stopped
+    # デバッグ用オプションを有効化
+    stdin_open: true
+    tty: true
+    # デバッグ用コマンド（通常起動をコメントアウトして使用）
+    # command: ["/bin/bash"]
