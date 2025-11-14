@@ -26,9 +26,10 @@ COPY . .
 RUN gcc spfa.c -o spfa21
 RUN gcc user_preference_speed.c -o up44 -lm
 RUN gcc yens_algorithm.c -o yens_algorithm -lm -std=c99
+RUN gcc calculate_wait_time.c -o signal -lm -std=c99
 
 # 作成した実行ファイルに実行権限を付与
-RUN chmod +x spfa21 up44 yens_algorithm
+RUN chmod +x spfa21 up44 yens_algorithm signal
 
 # ポート8081を公開
 EXPOSE 8081

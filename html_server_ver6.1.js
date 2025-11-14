@@ -183,103 +183,25 @@ const server = http.createServer(async (req, res) => {
                     throw new Error('result2.txt が見つかりません。先に経路を計算してください。');
                 console.log('[OK] 必須ファイルの存在を確認');
 
-                // 1. Read data files
-                const routeInfoCsv = fs.readFileSync('oomiya_route_inf_4.csv', 'utf8');
-                const signalInfoCsv = fs.readFileSync('signal_inf.csv', 'utf8');
-                const routeResultTxt = fs.readFileSync('result2.txt', 'utf8');
-                console.log('[OK] データファイルの読み込み完了');
-
-                if (signalInfoCsv.trim() === '') throw new Error('signal_inf.csv が空です。');
-                if (routeResultTxt.trim() === '') throw new Error('result2.txt が空です。');
-                console.log('[OK] ファイルが空でないことを確認');
-
-                // 2. Create lookup maps
-                const routeDataMap = new Map();
-                routeInfoCsv
-                    .split('\n')
-                    .slice(1)
-                    .forEach((line) => {
-                        if (line.trim() === '') return;
-                        const cols = line.trim().split(',');
-                        routeDataMap.set(`${cols[0]}-${cols[1]}`, {
-                            distance: parseFloat(cols[2]),
-                            gradient: parseFloat(cols[4]),
-                            isSignal: cols[8] === '1',
-                        });
+                // Cプログラムを実行して信号待ち時間を計算
+                console.log('[C言語計算] 信号待ち時間をC言語で計算中...');
+                try {
+                    const cProgramOutput = execSync(`./signal ${referenceEdge} ${walkingSpeed}`, {
+                        encoding: 'utf8',
+                        cwd: __dirname,
+                        maxBuffer: 10 * 1024 * 1024,
                     });
 
-                const signalDataMap = new Map();
-                signalInfoCsv
-                    .split('\n')
-                    .slice(1)
-                    .forEach((line) => {
-                        if (line.trim() === '') return;
-                        const cols = line.trim().split(',');
-                        signalDataMap.set(`${cols[0]}-${cols[1]}`, {
-                            cycle: parseInt(cols[2], 10),
-                            green: parseInt(cols[3], 10),
-                            phase: parseInt(cols[4], 10),
-                        });
-                    });
-                console.log('[OK] データマップの作成完了');
-
-                const routeEdges = routeResultTxt
-                    .split('\n')
-                    .filter((l) => l.trim() !== '')
-                    .map((l) => l.replace('.geojson', ''));
-                const signalizedRouteEdges = routeEdges.filter(
-                    (edge) => routeDataMap.get(edge)?.isSignal
-                );
-
-                // 3. Get reference phase
-                const referenceSignalData = signalDataMap.get(referenceEdge);
-                if (!referenceSignalData) {
-                    throw new Error(
-                        `基準信号 ${referenceEdge} が signal_inf.csv に見つかりません。`
-                    );
+                    console.log('[OK] C言語計算完了');
+                    const responsePayload = JSON.parse(cProgramOutput);
+                    console.log('成功レスポンスを送信:', JSON.stringify(responsePayload));
+                    res.writeHead(200, { 'Content-Type': 'application/json' });
+                    res.end(JSON.stringify(responsePayload));
+                } catch (cErr) {
+                    console.error(`[C言語実行エラー] ${cErr.message}`);
+                    console.error(`[C言語実行エラー詳細] ${cErr.stderr || cErr.stdout || ''}`);
+                    throw new Error('C言語プログラムの実行に失敗しました');
                 }
-                const referencePhase = referenceSignalData.phase;
-                console.log(`[OK] 基準位相を取得: ${referencePhase}`);
-
-                // 4. Simulate and calculate wait time
-                console.log('シミュレーションを開始...');
-                let totalWaitTime = 0;
-                let cumulativeTime = 0;
-                const K = 0.5;
-
-                for (const edge of routeEdges) {
-                    const edgeData = routeDataMap.get(edge);
-                    if (!edgeData) continue;
-
-                    const adjustedSpeed = walkingSpeed * (1 - K * edgeData.gradient);
-                    let travelTime = 0;
-                    if (adjustedSpeed > 0) {
-                        travelTime = edgeData.distance / adjustedSpeed;
-                    }
-                    cumulativeTime += travelTime;
-
-                    if (signalizedRouteEdges.includes(edge)) {
-                        const signalData = signalDataMap.get(edge);
-                        if (signalData) {
-                            const phaseDiff = Math.abs(signalData.phase - referencePhase);
-                            const arrivalTime = cumulativeTime;
-                            const timeIntoCycle =
-                                (arrivalTime - phaseDiff + signalData.cycle) % signalData.cycle;
-
-                            if (timeIntoCycle > signalData.green) {
-                                const waitTime = signalData.cycle - timeIntoCycle;
-                                totalWaitTime += waitTime;
-                                cumulativeTime += waitTime;
-                            }
-                        }
-                    }
-                }
-                console.log(`[OK] シミュレーション完了。総待ち時間: ${totalWaitTime}秒`);
-
-                const responsePayload = { totalWaitTime: totalWaitTime / 60 };
-                console.log('成功レスポンスを送信:', JSON.stringify(responsePayload));
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify(responsePayload));
             } catch (err) {
                 console.error('!!! /calculate-wait-time でエラー発生 !!!');
                 console.error('エラーメッセージ:', err.message);
@@ -288,85 +210,6 @@ const server = http.createServer(async (req, res) => {
                 console.log('エラーレスポンスを送信:', JSON.stringify(errorPayload));
                 res.writeHead(500, { 'Content-Type': 'application/json' });
                 res.end(JSON.stringify(errorPayload));
-            }
-        });
-        return;
-    }
-
-    /* ===== 信号待ち時間計算用のエンドポイント ===== */
-    if (req.url === '/calculate-wait-time' && req.method === 'POST') {
-        let body = '';
-        req.on('data', (chunk) => (body += chunk));
-        req.on('end', () => {
-            try {
-                const { startTime = 0 } = JSON.parse(body);
-
-                // 1. 必要なデータを読み込み
-                const routeInfoCsv = fs.readFileSync('oomiya_route_inf_4.csv', 'utf8');
-                const signalInfoCsv = fs.readFileSync('signal_inf.csv', 'utf8');
-                const routeResultTxt = fs.readFileSync('result2.txt', 'utf8');
-
-                // 2. Process data into efficient lookup maps
-                const routeDataMap = new Map();
-                const routeInfoLines = routeInfoCsv.split('\n').slice(1); // skip header
-                for (const line of routeInfoLines) {
-                    if (line.trim() === '') continue;
-                    const cols = line.trim().split(',');
-                    const timeInMinutes = parseFloat(cols[3]);
-                    const isSignal = cols[8] === '1';
-                    routeDataMap.set(`${cols[0]}-${cols[1]}`, { time: timeInMinutes, isSignal });
-                }
-
-                const signalDataMap = new Map();
-                const signalInfoLines = signalInfoCsv.split('\n');
-                for (const line of signalInfoLines) {
-                    if (line.trim() === '') continue;
-                    const cols = line.trim().split(',');
-                    signalDataMap.set(`${cols[0]}-${cols[1]}`, {
-                        cycle: parseInt(cols[2], 10),
-                        green: parseInt(cols[3], 10),
-                        phase: parseInt(cols[4], 10),
-                    });
-                }
-
-                // 3. 計算REを取得
-                const routeEdges = routeResultTxt
-                    .split('\n')
-                    .filter((l) => l.trim() !== '')
-                    .map((l) => l.replace('.geojson', ''));
-
-                // 4. 総待ち時間を計算
-                let totalWaitTime = 0;
-                let cumulativeTime = startTime * 60;
-
-                for (const edge of routeEdges) {
-                    const edgeData = routeDataMap.get(edge);
-                    if (!edgeData) continue;
-
-                    cumulativeTime += edgeData.time * 60;
-
-                    if (edgeData.isSignal) {
-                        const signalData = signalDataMap.get(edge);
-                        if (signalData) {
-                            const { cycle, green, phase } = signalData;
-                            const arrivalTime = cumulativeTime;
-                            const timeIntoCycle = (arrivalTime - phase + cycle) % cycle;
-
-                            if (timeIntoCycle > green) {
-                                const waitTime = cycle - timeIntoCycle;
-                                totalWaitTime += waitTime;
-                                cumulativeTime += waitTime;
-                            }
-                        }
-                    }
-                }
-
-                res.writeHead(200, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ totalWaitTime: totalWaitTime / 60 }));
-            } catch (err) {
-                console.error(`Wait time calculation error: ${err.message}`);
-                res.writeHead(500, { 'Content-Type': 'application/json' });
-                res.end(JSON.stringify({ error: err.message }));
             }
         });
         return;
