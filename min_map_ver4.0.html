@@ -1035,56 +1035,32 @@
 
                 if (!routes || routes.length === 0) return;
 
-                // Limit the number of routes to display to prevent performance issues
-                const maxDisplayRoutes = 50;
-                const routesToDisplay = routes.slice(0, maxDisplayRoutes);
-                if (routes.length > maxDisplayRoutes) {
-                    showToast(`${routes.length}件の経路が見つかりましたが、最初の${maxDisplayRoutes}件のみ表示します。`, 'info');
-                }
-
-                const colors = generateRouteColors(routesToDisplay.length);
+                // 全ての経路を赤色で統一表示
+                const redColor = '#ff4757';  // 赤色
                 const geojsonFolder = './oomiya_line/';
-
-                // Draw all routes
-                for (let i = 0; i < routesToDisplay.length; i++) {
-                    const route = routesToDisplay[i];
-                    const color = colors[i];
-                    const weight = i === 0 ? 8 : 5; // First route (shortest) is thicker
-                    const opacity = i === 0 ? 1.0 : 0.6; // First route is more opaque
-
-                    const segments = route.userPref
-                        .split('\n')
-                        .filter((line) => line.trim() !== '');
-
-                    try {
-                        await Promise.all(
-                            segments.map((filename) =>
-                                fetch(geojsonFolder + filename.trim())
-                                    .then((res) => {
-                                        if (!res.ok) throw new Error(`${filename}の読み込みに失敗`);
-                                        return res.json();
-                                    })
-                                    .then((data) => {
-                                        const geojsonLayer = L.geoJSON(data, {
-                                            style: { 
-                                                color: color, 
-                                                weight: weight, 
-                                                opacity: opacity,
-                                                dashArray: i === 0 ? null : '5, 5' // Dashed lines for alternative routes
-                                            },
-                                        }).addTo(map);
-                                        allRouteLayers.push(geojsonLayer);
-                                    })
-                                    .catch((err) => {
-                                        console.warn(`Error loading ${filename}:`, err);
-                                    })
-                            )
-                        );
-                    } catch (error) {
-                        console.error(`Error drawing route ${i + 1}:`, error);
+                
+                // 重複する経路を除外（userPrefが同じ経路を除外）
+                const uniqueRoutes = [];
+                const seenRoutes = new Set();
+                for (const route of routes) {
+                    const routeKey = route.userPref.trim();
+                    if (!seenRoutes.has(routeKey)) {
+                        seenRoutes.add(routeKey);
+                        uniqueRoutes.push(route);
                     }
                 }
+                
+                const routesToDisplay = uniqueRoutes;
+                const totalRoutes = routesToDisplay.length;
+                
+                if (totalRoutes > 0) {
+                    showToast(`${totalRoutes}件の経路を表示中...`, 'info');
+                }
 
+                // バッチ処理で段階的に表示（パフォーマンス向上のため）
+                const batchSize = 20;  // 一度に処理する経路数
+                const delayBetweenBatches = 10;  // バッチ間の待機時間（ミリ秒）
+                
                 // Update route info with first route (shortest)
                 if (routesToDisplay.length > 0) {
                     route1.info = {
@@ -1097,6 +1073,60 @@
                         .filter((line) => line.trim() !== '')
                         .map((line) => line.trim());
                     updateRouteInfoDisplay();
+                }
+
+                // バッチ処理で段階的に描画
+                for (let batchStart = 0; batchStart < routesToDisplay.length; batchStart += batchSize) {
+                    const batchEnd = Math.min(batchStart + batchSize, routesToDisplay.length);
+                    const batch = routesToDisplay.slice(batchStart, batchEnd);
+                    
+                    // 現在のバッチを処理
+                    const batchPromises = [];
+                    for (const route of batch) {
+                        const segments = route.userPref
+                            .split('\n')
+                            .filter((line) => line.trim() !== '');
+                        
+                        for (const filename of segments) {
+                            const promise = fetch(geojsonFolder + filename.trim())
+                                .then((res) => {
+                                    if (!res.ok) throw new Error(`${filename}の読み込みに失敗`);
+                                    return res.json();
+                                })
+                                .then((data) => {
+                                    const geojsonLayer = L.geoJSON(data, {
+                                        style: { 
+                                            color: redColor, 
+                                            weight: 5, 
+                                            opacity: 0.6,
+                                            dashArray: null
+                                        },
+                                    }).addTo(map);
+                                    allRouteLayers.push(geojsonLayer);
+                                })
+                                .catch((err) => {
+                                    console.warn(`Error loading ${filename}:`, err);
+                                });
+                            batchPromises.push(promise);
+                        }
+                    }
+                    
+                    // バッチの処理を待つ
+                    await Promise.all(batchPromises);
+                    
+                    // 次のバッチの前に少し待機してUIを更新できるようにする
+                    if (batchEnd < routesToDisplay.length) {
+                        await new Promise(resolve => setTimeout(resolve, delayBetweenBatches));
+                        // 進捗を更新
+                        const progress = Math.floor((batchEnd / routesToDisplay.length) * 100);
+                        if (progress % 20 === 0) {  // 20%ごとに更新
+                            console.log(`経路表示中: ${batchEnd}/${routesToDisplay.length} (${progress}%)`);
+                        }
+                    }
+                }
+                
+                if (totalRoutes > 0) {
+                    showToast(`${totalRoutes}件の経路を表示しました。`, 'success');
                 }
             };
 
