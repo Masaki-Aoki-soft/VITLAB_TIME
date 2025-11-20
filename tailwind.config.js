@@ -1,8 +1,9 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
     content: [
-        './*.html', // 静的HTMLならここを指定
-        './src/**/*.{js,ts,jsx,tsx}', // React/Next.jsを使う場合
+        './app/**/*.{js,ts,jsx,tsx,mdx}',
+        './components/**/*.{js,ts,jsx,tsx,mdx}',
+        './pages/**/*.{js,ts,jsx,tsx,mdx}',
     ],
     theme: {
         extend: {
