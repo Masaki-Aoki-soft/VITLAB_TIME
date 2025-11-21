@@ -48,6 +48,8 @@ ENV NEXT_TELEMETRY_DISABLED=1
 # standaloneモードでは、.next/standaloneに必要なファイルがすべて含まれます
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# publicディレクトリを作成してからコピー（空でもOK）
+RUN mkdir -p ./public
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 # Cプログラムの実行ファイルをコピー
