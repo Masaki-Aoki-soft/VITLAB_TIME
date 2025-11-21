@@ -569,7 +569,7 @@ export default function Home() {
                                 <i className="fas fa-eye text-yellow-300"></i>
                                 表示データ
                             </h3>
-                            <div className="grid grid-cols-6 gap-2">
+                            <div className="grid grid-cols-6 gap-2 auto-rows-fr">
                                 <button
                                     onClick={viewAREA}
                                     disabled={isLoading}
@@ -656,7 +656,7 @@ export default function Home() {
                                 </button>
                             </div>
                         </div>
-                        <div className="xl:col-span-1 flex flex-col">
+                        <div className="col-span-1 flex flex-col">
                             <div className="glass-effect rounded-xl p-4 flex-grow">
                                 <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                                     <i className="fas fa-info-circle text-yellow-300"></i>
@@ -672,9 +672,9 @@ export default function Home() {
                     </div>
 
                     {/* メインコンテンツ */}
-                    <div className="grid grid-cols-1 lg:grid-cols-9 gap-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
                         {/* 左側パネル */}
-                        <div className="xl:col-span-2 flex flex-col gap-6">
+                        <div className="lg:col-span-3 flex flex-col gap-6">
                             {/* 地点設定 */}
                             <div className="glass-effect rounded-xl p-6">
                                 <h3 className="text-white font-semibold text-lg mb-4 flex items-center gap-2">
@@ -868,7 +868,7 @@ export default function Home() {
                         </div>
 
                         {/* 中央：マップ */}
-                        <div className="xl:col-span-4">
+                        <div className="lg:col-span-6">
                             <MapComponent
                                 mapRef={mapRef}
                                 routeLayers={routeLayers}
@@ -908,12 +908,12 @@ export default function Home() {
                         </div>
 
                         {/* 右側：重み設定 */}
-                        <div className="glass-effect rounded-xl p-4 col-span-3">
+                        <div className="glass-effect rounded-xl p-4 lg:col-span-3">
                             <h3 className="text-white font-semibold text-xl mb-4 flex items-center gap-2">
                                 <i className="fas fa-sliders-h text-yellow-300"></i>
                                 重み設定
                             </h3>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-2 xl:grid-cols-2 gap-2">
+                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2 gap-2">
                                 <WeightSlider
                                     id="weight0"
                                     label="距離 (+)"

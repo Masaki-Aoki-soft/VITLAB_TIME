@@ -118,6 +118,7 @@ double calculateSignalWaitTimeExpected(int edgeIdx) {
 }
 
 // 全ての信号の平均的な期待値を計算（秒）
+// 注意: この関数は現在使用されていません。各信号ごとに個別の期待値を使用するため。
 double calculateAverageSignalWaitTimeExpected() {
     if (signalCount == 0) return 0.0;
     
@@ -134,14 +135,10 @@ double calculateAverageSignalWaitTimeExpected() {
     return count > 0 ? totalExpected / count : 0.0;
 }
 
-// 信号待ち時間を計算（秒）- 期待値を使用（全ての信号で同じ）
+// 信号待ち時間を計算（秒）- 各信号ごとに個別の期待値を使用
 double calculateSignalWaitTime(int edgeIdx, double arrivalTimeSeconds) {
-    // 期待値を使用（全ての信号で同じ）
-    static double averageExpected = -1.0;
-    if (averageExpected < 0) {
-        averageExpected = calculateAverageSignalWaitTimeExpected();
-    }
-    return averageExpected;
+    // 各信号ごとに個別の期待値を計算
+    return calculateSignalWaitTimeExpected(edgeIdx);
 }
 
 // 横断歩道待ち時間を計算（秒）
@@ -1098,8 +1095,7 @@ YenResult generateRoutesBySignalCombinations(int start, int end) {
         return result;
     }
     
-    // 信号待ち時間の期待値（全ての信号で同じ）
-    double signalWaitTimeExpected = calculateAverageSignalWaitTimeExpected();
+    // 信号ごとに個別の期待値を使用するため、平均値は使用しない
     
     // 信号の組み合わせを生成（2^signalCount - 1通り、全て通らない組み合わせを除く）
     // 9個の信号の場合、2^9 - 1 = 511通り
@@ -1205,8 +1201,17 @@ YenResult generateRoutesBySignalCombinations(int start, int end) {
                     // 経路メトリクスを計算（信号待ち時間は期待値として追加）
                     RouteMetrics metrics = calculateRouteMetrics(path.path, path.pathLength);
                     
-                    // 信号待ち時間を期待値として追加（通る信号の数 × 期待値）
-                    double totalSignalWaitTime = signalWaitTimeExpected * requiredSignalCount / 60.0;  // 分に変換
+                    // 経路内の各信号ごとに個別の期待値を計算して合計
+                    double totalSignalWaitTime = 0.0;
+                    for (int k = 0; k < path.pathLength; k++) {
+                        EdgeData *edge = &edgeDataArray[path.path[k]];
+                        if (edge->isSignal) {
+                            // 各信号ごとに個別の期待値を計算（秒）
+                            double signalExpected = calculateSignalWaitTimeExpected(path.path[k]);
+                            totalSignalWaitTime += signalExpected;
+                        }
+                    }
+                    totalSignalWaitTime /= 60.0;  // 分に変換
                     
                     Path *p = &result.paths[result.pathCount];
                     memcpy(p->edges, path.path, path.pathLength * sizeof(int));

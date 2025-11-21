@@ -1,7 +1,7 @@
-# マルチステージビルドを使用して最適化（Bun使用）
+# マルチステージビルドを使用して最適化（Node.js使用）
 
 # ステージ1: 依存関係のインストールとビルド
-FROM oven/bun:1-alpine AS builder
+FROM node:18-alpine AS builder
 
 # Cコンパイラとビルドツールをインストール（Cプログラムのコンパイル用）
 RUN apk add --no-cache build-base gcc musl-dev
@@ -9,11 +9,11 @@ RUN apk add --no-cache build-base gcc musl-dev
 # 作業ディレクトリを設定
 WORKDIR /app
 
-# package.jsonとbun.lockbをコピー
-COPY package.json bun.lockb* ./
+# package.jsonとpackage-lock.jsonをコピー
+COPY package*.json ./
 
-# 依存関係をインストール（Bunを使用）
-RUN bun install --frozen-lockfile || bun install
+# 依存関係をインストール（npmを使用）
+RUN npm install --legacy-peer-deps
 
 # プロジェクトファイルをコピー
 COPY . .
@@ -26,10 +26,10 @@ RUN gcc spfa.c -o spfa21 && \
     chmod +x spfa21 up44 yens_algorithm signal
 
 # Next.jsアプリケーションをビルド
-RUN bun run next build
+RUN npm run build
 
 # ステージ2: 本番用イメージ
-FROM oven/bun:1-alpine AS runner
+FROM node:18-alpine AS runner
 
 # セキュリティのため、非rootユーザーを作成
 RUN addgroup --system --gid 1001 nodejs && \
@@ -74,5 +74,4 @@ ENV PORT=3000
 ENV HOSTNAME="0.0.0.0"
 
 # Next.jsサーバーを起動
-# standaloneモードでは、server.jsはNode.js互換なのでbunで実行可能
-CMD ["bun", "server.js"]
+CMD ["node", "server.js"]

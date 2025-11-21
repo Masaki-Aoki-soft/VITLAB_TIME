@@ -142,8 +142,12 @@ export default function MapComponent({
     dataLayers = [],
     startMarker,
 }: MapComponentProps) {
+    useEffect(() => {
+        console.log('MapComponent rendered', { routeLayers: routeLayers.length, dataLayers: dataLayers.length, startMarker });
+    }, [routeLayers, dataLayers, startMarker]);
+
     return (
-        <div className="bg-white rounded-2xl overflow-hidden card-shadow h-[375px] mb-3">
+        <div className="bg-white rounded-2xl overflow-hidden card-shadow mb-3" style={{ height: '500px', minHeight: '500px' }}>
             <MapContainer
                 center={[35.95017, 139.64735]}
                 zoom={15}
