@@ -10,15 +10,16 @@
         "legacy:server": "node html_server_ver6.1.js"
     },
     "dependencies": {
+        "@turf/turf": "^6.5.0",
+        "hono": "^4.10.6",
+        "leaflet": "^1.9.4",
+        "mime-types": "^2.1.35",
         "next": "^14.0.0",
+        "papaparse": "^5.4.1",
         "react": "^18.2.0",
         "react-dom": "^18.2.0",
-        "leaflet": "^1.9.4",
-        "react-leaflet": "^4.2.1",
-        "@turf/turf": "^6.5.0",
-        "papaparse": "^5.4.1",
-        "mime-types": "^2.1.35",
-        "react-hot-toast": "^2.4.1"
+        "react-hot-toast": "^2.4.1",
+        "react-leaflet": "^4.2.1"
     },
     "devDependencies": {
         "@types/node": "^20.0.0",

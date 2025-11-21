@@ -74,3 +74,4 @@ ENV HOSTNAME="0.0.0.0"
 # Next.jsサーバーを起動
 CMD ["node", "server.js"]
 
+
