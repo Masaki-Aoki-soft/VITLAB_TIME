@@ -7,7 +7,11 @@
         "build": "next build",
         "start": "next start",
         "lint": "next lint",
-        "legacy:server": "node html_server_ver6.1.js"
+        "legacy:server": "node html_server_ver6.1.js",
+        "build:wasm": "node build-wasm.js",
+        "build:wasm:win": "cmd /c build-wasm.bat",
+        "build:wasm:win:emsdk": "cmd /c build-wasm-with-emsdk.bat",
+        "build:wasm:unix": "bash build-wasm.sh"
     },
     "dependencies": {
         "@turf/turf": "^6.5.0",

@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
-import { execSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
+import { loadWASMModule, writeFileToWASMFS, readFileFromWASMFS } from '../../../lib/wasm-loader';
 
 const calc_wait_time = new Hono().post('/calculateWaitTime', async (c) => {
     console.log('\n--- [/calculate-wait-time]リクエスト受信 ---');
@@ -25,23 +25,54 @@ const calc_wait_time = new Hono().post('/calculateWaitTime', async (c) => {
             throw new Error('result2.txt が見つかりません。先に経路を計算してください。');
         console.log('[OK] 必須ファイルの存在を確認');
 
-        // Cプログラムを実行して信号待ち時間を計算
-        console.log('[C言語計算] 信号待ち時間をC言語で計算中...');
+        // WASMプログラムを実行して信号待ち時間を計算
+        console.log('[WASM計算] 信号待ち時間をWASMで計算中...');
         try {
-            const cProgramOutput = execSync(`./signal ${referenceEdge} ${walkingSpeed}`, {
-                encoding: 'utf8',
-                cwd: projectRoot,
-                maxBuffer: 10 * 1024 * 1024,
-            });
+            // calculate_wait_time WASMモジュールを読み込む
+            console.log('[WASM] calculate_wait_timeモジュールを読み込み中...');
+            const signalModule = await loadWASMModule('calculate_wait_time');
+            
+            // 必要なファイルをWASMの仮想ファイルシステムにコピー
+            const routeDataFile = path.join(projectRoot, 'oomiya_route_inf_4.csv');
+            const routeData = fs.readFileSync(routeDataFile, 'utf8');
+            writeFileToWASMFS(signalModule, 'oomiya_route_inf_4.csv', routeData);
+            
+            const signalDataFile = path.join(projectRoot, 'signal_inf.csv');
+            const signalData = fs.readFileSync(signalDataFile, 'utf8');
+            writeFileToWASMFS(signalModule, 'signal_inf.csv', signalData);
+            
+            const result2File = path.join(projectRoot, 'result2.txt');
+            const result2Data = fs.readFileSync(result2File, 'utf8');
+            writeFileToWASMFS(signalModule, 'result2.txt', result2Data);
 
-            console.log('[OK] C言語計算完了');
-            const responsePayload = JSON.parse(cProgramOutput);
+            // calculate_wait_timeを実行
+            let stdout = '';
+            const originalPrint = signalModule.print;
+            signalModule.print = (text: string) => {
+                stdout += text;
+            };
+            
+            try {
+                signalModule.callMain(['calculate_wait_time', referenceEdge, String(walkingSpeed)]);
+            } finally {
+                signalModule.print = originalPrint;
+            }
+
+            console.log('[OK] WASM計算完了');
+            
+            // JSONをパース（標準出力から取得）
+            const jsonMatch = stdout.match(/\{[\s\S]*\}/);
+            if (!jsonMatch) {
+                throw new Error('JSON output not found in WASM output');
+            }
+            
+            const responsePayload = JSON.parse(jsonMatch[0]);
             console.log('成功レスポンスを送信:', JSON.stringify(responsePayload));
             return c.json(responsePayload);
         } catch (cErr: any) {
-            console.error(`[C言語実行エラー] ${cErr.message}`);
-            console.error(`[C言語実行エラー詳細] ${cErr.stderr || cErr.stdout || ''}`);
-            throw new Error('C言語プログラムの実行に失敗しました');
+            console.error(`[WASM実行エラー] ${cErr.message}`);
+            console.error(`[WASM実行エラー詳細] ${cErr.stack || ''}`);
+            throw new Error('WASMプログラムの実行に失敗しました');
         }
     } catch (err: any) {
         console.error('!!! /calculate-wait-time でエラー発生 !!!');

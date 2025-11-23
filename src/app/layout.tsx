@@ -3,7 +3,7 @@ import { Inter } from 'next/font/google';
 import { NextFont } from 'next/dist/compiled/@next/font';
 import { ReactNode, Suspense } from 'react';
 import './styles/globals.css';
-import { ToasterContext } from './context/Toastcontest';
+import { ToasterContext } from './context/Toastcontext';
 
 export const metadata: Metadata = {
     title: '経路探索マップ',
