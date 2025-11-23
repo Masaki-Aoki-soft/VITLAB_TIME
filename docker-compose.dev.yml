@@ -1,0 +1,33 @@
+services:
+  map-server:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    container_name: nextjs-route-map-dev
+    ports:
+      - "3000:3000"
+    volumes:
+      # ソースコードをマウントしてホットリロードを有効化
+      - .:/app
+      - /app/node_modules
+      - /app/.next
+      # データファイルをマウント
+      - ./oomiya_line:/app/oomiya_line:ro
+      - ./oomiya_point:/app/oomiya_point:ro
+      - ./RE_AREA.geojson:/app/RE_AREA.geojson:ro
+      - ./oomiya_route_inf_4.csv:/app/oomiya_route_inf_4.csv:ro
+      - ./result2.txt:/app/result2.txt:ro
+      - ./signal.txt:/app/signal.txt:ro
+      - ./signal_inf.csv:/app/signal_inf.csv:ro
+      - ./saving_route:/app/saving_route
+    environment:
+      - NODE_ENV=development
+      - PORT=3000
+      - HOSTNAME=0.0.0.0
+      - WATCHPACK_POLLING=true
+      - LD_LIBRARY_PATH=/lib:/usr/lib:/usr/local/lib
+    restart: unless-stopped
+    stdin_open: true
+    tty: true
+
+

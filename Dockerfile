@@ -1,38 +1,77 @@
-# ベースイメージとしてUbuntu 20.04を使用
-FROM ubuntu:20.04
+# マルチステージビルドを使用して最適化（Node.js使用）
 
-# 環境変数を設定
-ENV DEBIAN_FRONTEND=noninteractive
+# ステージ1: 依存関係のインストールとビルド
+FROM node:18-alpine AS builder
 
-# Cコンパイラ(gcc)とNode.jsをインストール
-RUN apt-get update && \
-    apt-get install -y build-essential curl && \
-    curl -fsSL https://deb.nodesource.com/setup_18.x | bash - && \
-    apt-get install -y nodejs && \
-    rm -rf /var/lib/apt/lists/*
+# Cコンパイラとビルドツールをインストール（Cプログラムのコンパイル用）
+RUN apk add --no-cache build-base gcc musl-dev
 
-# アプリケーションの作業ディレクトリを設定
+# 作業ディレクトリを設定
 WORKDIR /app
 
-# package.jsonとpackage-lock.jsonをコピーし、依存関係をインストール
+# package.jsonとpackage-lock.jsonをコピー
 COPY package*.json ./
-RUN npm install
 
-# プロジェクトの全てのファイルをコンテナにコピー
+# 依存関係をインストール（npmを使用）
+RUN npm install --legacy-peer-deps
+
+# プロジェクトファイルをコピー
 COPY . .
 
 # C言語のソースコードをコンパイルして実行ファイルを作成
-# -lm オプションは、mathライブラリ（pow関数など）をリンクするために必要
-RUN gcc spfa.c -o spfa21
-RUN gcc user_preference_speed.c -o up44 -lm
-RUN gcc yens_algorithm.c -o yens_algorithm -lm -std=c99
-RUN gcc calculate_wait_time.c -o signal -lm -std=c99
+RUN gcc spfa.c -o spfa21 && \
+    gcc user_preference_speed.c -o up44 -lm && \
+    gcc yens_algorithm.c -o yens_algorithm -lm -std=c99 && \
+    gcc calculate_wait_time.c -o signal -lm -std=c99 && \
+    chmod +x spfa21 up44 yens_algorithm signal
 
-# 作成した実行ファイルに実行権限を付与
-RUN chmod +x spfa21 up44 yens_algorithm signal
+# Next.jsアプリケーションをビルド
+RUN npm run build
 
-# ポート8081を公開
-EXPOSE 8081
+# ステージ2: 本番用イメージ
+FROM node:18-alpine AS runner
 
-# サーバーを起動
-CMD ["node", "html_server_ver6.1.js"]
+# セキュリティのため、非rootユーザーを作成
+RUN addgroup --system --gid 1001 nodejs && \
+    adduser --system --uid 1001 nextjs
+
+# Cプログラムの実行に必要なライブラリをインストール
+RUN apk add --no-cache libc6-compat
+
+WORKDIR /app
+
+# 本番環境用の環境変数を設定
+ENV NODE_ENV=production
+ENV NEXT_TELEMETRY_DISABLED=1
+
+# Next.jsのビルド成果物をコピー
+# standaloneモードでは、.next/standaloneに必要なファイルがすべて含まれます
+COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
+COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# publicディレクトリを作成してからコピー（空でもOK）
+RUN mkdir -p ./public
+COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+
+# Cプログラムの実行ファイルをコピー
+COPY --from=builder --chown=nextjs:nodejs /app/spfa21 /app/up44 /app/yens_algorithm /app/signal ./
+
+# データファイルをコピー（必要に応じて）
+COPY --from=builder --chown=nextjs:nodejs /app/oomiya_line ./oomiya_line
+COPY --from=builder --chown=nextjs:nodejs /app/oomiya_point ./oomiya_point
+COPY --from=builder --chown=nextjs:nodejs /app/*.csv ./
+COPY --from=builder --chown=nextjs:nodejs /app/*.geojson ./
+COPY --from=builder --chown=nextjs:nodejs /app/*.txt ./
+COPY --from=builder --chown=nextjs:nodejs /app/saving_route ./saving_route
+COPY --from=builder --chown=nextjs:nodejs /app/signal_inf.csv ./
+
+# ユーザーを変更
+USER nextjs
+
+# ポート3000を公開（Next.jsのデフォルトポート）
+EXPOSE 3000
+
+ENV PORT=3000
+ENV HOSTNAME="0.0.0.0"
+
+# Next.jsサーバーを起動
+CMD ["node", "server.js"]

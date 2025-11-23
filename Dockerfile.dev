@@ -1,0 +1,31 @@
+# 開発環境用のDockerfile（ホットリロード対応、Bun使用）
+
+FROM oven/bun:1-alpine
+
+# Cコンパイラとビルドツールをインストール
+RUN apk add --no-cache build-base gcc musl-dev
+
+# 作業ディレクトリを設定
+WORKDIR /app
+
+# package.jsonとbun.lockbをコピー
+COPY package.json bun.lockb* ./
+
+# 依存関係をインストール（Bunを使用）
+RUN bun install --frozen-lockfile || bun install
+
+# プロジェクトファイルをコピー
+COPY . .
+
+# C言語のソースコードをコンパイルして実行ファイルを作成
+RUN gcc spfa.c -o spfa21 && \
+    gcc user_preference_speed.c -o up44 -lm && \
+    gcc yens_algorithm.c -o yens_algorithm -lm -std=c99 && \
+    gcc calculate_wait_time.c -o signal -lm -std=c99 && \
+    chmod +x spfa21 up44 yens_algorithm signal
+
+# ポート3000を公開
+EXPOSE 3000
+
+# 開発サーバーを起動（ホットリロード有効）
+CMD ["next", "dev"]
