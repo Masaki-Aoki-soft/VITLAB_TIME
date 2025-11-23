@@ -29,6 +29,7 @@ typedef struct {
     int signalCycle;
     int signalGreen;
     double signalPhase;
+    double expectedWaitTime;  // 各信号ごとの期待値（秒）。CSVから読み込む
 } EdgeData;
 
 // グラフ構造
@@ -105,34 +106,13 @@ double getEdgeTimeSeconds(int from, int to) {
     return (edge->distance / adjustedSpeed) * 60.0;
 }
 
-// 信号待ち時間の期待値を計算（秒）- 全ての信号で同じ値を使用
+// 信号待ち時間の期待値を取得（秒）- CSVのexpectedカラムから直接使用
 double calculateSignalWaitTimeExpected(int edgeIdx) {
     EdgeData *edge = &edgeDataArray[edgeIdx];
     if (!edge->isSignal || edge->signalCycle <= 0) return 0.0;
     
-    double redTime = edge->signalCycle - edge->signalGreen;
-    if (redTime <= 0) return 0.0;
-    
-    // 期待値として (redTime^2) / (2 * cycle) を返す
-    return (redTime * redTime) / (2.0 * edge->signalCycle);
-}
-
-// 全ての信号の平均的な期待値を計算（秒）
-// 注意: この関数は現在使用されていません。各信号ごとに個別の期待値を使用するため。
-double calculateAverageSignalWaitTimeExpected() {
-    if (signalCount == 0) return 0.0;
-    
-    double totalExpected = 0.0;
-    int count = 0;
-    for (int i = 0; i < signalCount; i++) {
-        double expected = calculateSignalWaitTimeExpected(signalEdges[i]);
-        if (expected > 0) {
-            totalExpected += expected;
-            count++;
-        }
-    }
-    
-    return count > 0 ? totalExpected / count : 0.0;
+    // CSVから読み込んだ期待値を直接返す
+    return edge->expectedWaitTime >= 0.0 ? edge->expectedWaitTime : 0.0;
 }
 
 // 信号待ち時間を計算（秒）- 各信号ごとに個別の期待値を使用
@@ -643,6 +623,7 @@ void loadGraphFromResult(const char *filename) {
                     edgeDataArray[edgeIdx].signalCycle = 0;
                     edgeDataArray[edgeIdx].signalGreen = 0;
                     edgeDataArray[edgeIdx].signalPhase = 0.0;
+                    edgeDataArray[edgeIdx].expectedWaitTime = 0.0;  // デフォルト値
                 }
                 
                 if (edgeIdx >= 0) {
@@ -747,6 +728,7 @@ void loadRouteData(const char *filename) {
                 edgeIdx = edgeDataCount++;
                 edgeDataArray[edgeIdx].from = from;
                 edgeDataArray[edgeIdx].to = to;
+                edgeDataArray[edgeIdx].expectedWaitTime = 0.0;  // デフォルト値
             }
             if (edgeIdx >= 0) {
                 // エッジデータを更新
@@ -784,12 +766,15 @@ void loadSignalData(const char *filename) {
         char edgeKey[64];
         int cycle, green;
         double phase;
+        double expectedWaitTime = 0.0;  // CSVから読み込んだ期待値
         
-        // signal_inf.csvのフォーマット: node1,node2,cycle,green,phase
+        // signal_inf.csvのフォーマット: node1,node2,cycle,green,phase,expected
         // cycle, green, phaseは浮動小数点数として読み込む
+        // expected（期待値）は必須
         int from, to;
         double cycle_d, green_d;
-        if (sscanf(line, "%d,%d,%lf,%lf,%lf", &from, &to, &cycle_d, &green_d, &phase) == 5) {
+        int parsed = sscanf(line, "%d,%d,%lf,%lf,%lf,%lf", &from, &to, &cycle_d, &green_d, &phase, &expectedWaitTime);
+        if (parsed >= 6) {
             // 浮動小数点数を整数に変換（cycle, greenは整数として扱う）
             cycle = (int)cycle_d;
             green = (int)green_d;
@@ -798,14 +783,15 @@ void loadSignalData(const char *filename) {
                 edgeDataArray[edgeIdx].signalCycle = cycle;
                 edgeDataArray[edgeIdx].signalGreen = green;
                 edgeDataArray[edgeIdx].signalPhase = phase;
+                edgeDataArray[edgeIdx].expectedWaitTime = expectedWaitTime;  // CSVから読み込んだ期待値を設定
                 
                 // 信号エッジのリストに追加（重複を避ける）
                 // signal_inf.csvに含まれる信号エッジのみを追加
                 if (!seenEdges[edgeIdx] && signalCount < MAX_SIGNALS) {
                     signalEdges[signalCount++] = edgeIdx;
                     seenEdges[edgeIdx] = true;
-                    fprintf(stderr, "Signal %d: edge %d (%d-%d) cycle=%d green=%d phase=%.2f\n", 
-                            signalCount, edgeIdx, from, to, cycle, green, phase);
+                    fprintf(stderr, "Signal %d: edge %d (%d-%d) cycle=%d green=%d phase=%.2f expected=%.2f\n", 
+                            signalCount, edgeIdx, from, to, cycle, green, phase, expectedWaitTime);
                 }
             } else {
                 fprintf(stderr, "Warning: Signal edge %d-%d not found in graph (edgeIdx=%d)\n", from, to, edgeIdx);
