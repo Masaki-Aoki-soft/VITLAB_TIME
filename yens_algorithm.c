@@ -1,11 +1,16 @@
 /* イェンのアルゴリズムを用いたK最短経路探索（信号待ち時間考慮） */
 
+#define _GNU_SOURCE  // M_PIを使用するため
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <float.h>
 #include <math.h>
 #include <stdbool.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846  // C99標準でM_PIが定義されていない場合のフォールバック
+#endif
 
 #define MAX_NODES 300
 #define MAX_EDGES 1000
@@ -17,6 +22,9 @@
 #define K_GRADIENT 0.5
 #define AVERAGE_CAR_INTERVAL 15.0
 #define SAFE_CROSSING_GAP 5.0
+#define MAX_FILENAME_LENGTH 256
+#define ANGLE_TOLERANCE 45.0  // 方向フィルターの角度許容範囲（度、ゴール方向を0度として左右±45度）
+#define DETOUR_THRESHOLD 1.5  // 遠回り判定の閾値（最短経路の1.5倍以上を遠回りと判定）
 
 // エッジ情報
 typedef struct {
@@ -53,6 +61,13 @@ typedef struct {
     double totalTimeWithExpected;
 } Path;
 
+// ノード座標情報
+typedef struct {
+    double longitude;  // 経度
+    double latitude;   // 緯度
+    bool hasCoordinates;  // 座標が読み込まれているか
+} NodeCoordinates;
+
 // グローバル変数
 GraphNode graph[MAX_NODES];
 EdgeData edgeDataArray[MAX_EDGES];
@@ -60,6 +75,9 @@ int edgeDataCount = 0;
 double walkingSpeed = 80.0; // m/min
 int signalEdges[MAX_SIGNALS];  // 信号エッジのインデックスリスト
 int signalCount = 0;  // 信号の数
+NodeCoordinates nodeCoords[MAX_NODES];  // ノード座標
+int startNode = 0;  // スタートノード（フィルター用）
+int endNode = 0;  // エンドノード（フィルター用）
 
 // グラフを初期化
 void initGraph() {
@@ -743,6 +761,250 @@ void loadRouteData(const char *filename) {
     fclose(file);
 }
 
+// ノード座標を読み込む（GeoJSONファイルから）
+void loadNodeCoordinates(const char *pointDir) {
+    // 全てのノード座標を初期化
+    for (int i = 0; i < MAX_NODES; i++) {
+        nodeCoords[i].hasCoordinates = false;
+        nodeCoords[i].longitude = 0.0;
+        nodeCoords[i].latitude = 0.0;
+    }
+    
+    // 各ノードのGeoJSONファイルを読み込む
+    for (int nodeId = 1; nodeId < MAX_NODES; nodeId++) {
+        char filename[MAX_FILENAME_LENGTH];
+        snprintf(filename, sizeof(filename), "%s/%d.geojson", pointDir, nodeId);
+        
+        FILE *file = fopen(filename, "r");
+        if (!file) continue;  // ファイルが存在しない場合はスキップ
+        
+        char line[1024];
+        if (fgets(line, sizeof(line), file)) {
+            // 簡易的なJSONパース（coordinates配列を探す）
+            // フォーマット: {"type":"Feature","geometry":{"type":"Point","coordinates":[lng,lat]},...}
+            char *coordsStart = strstr(line, "\"coordinates\":[");
+            if (coordsStart) {
+                coordsStart += strlen("\"coordinates\":[");
+                char *coordsEnd = strstr(coordsStart, "]");
+                if (coordsEnd) {
+                    *coordsEnd = '\0';
+                    double lng, lat;
+                    if (sscanf(coordsStart, "%lf,%lf", &lng, &lat) == 2) {
+                        nodeCoords[nodeId].longitude = lng;
+                        nodeCoords[nodeId].latitude = lat;
+                        nodeCoords[nodeId].hasCoordinates = true;
+                    }
+                }
+            }
+        }
+        fclose(file);
+    }
+    
+    fprintf(stderr, "Loaded node coordinates from %s\n", pointDir);
+}
+
+// 2点間の距離を計算（メートル、Haversine公式）
+double calculateDistance(double lat1, double lon1, double lat2, double lon2) {
+    const double R = 6371000.0;  // 地球の半径（メートル）
+    double dLat = (lat2 - lat1) * M_PI / 180.0;
+    double dLon = (lon2 - lon1) * M_PI / 180.0;
+    double a = sin(dLat / 2.0) * sin(dLat / 2.0) +
+               cos(lat1 * M_PI / 180.0) * cos(lat2 * M_PI / 180.0) *
+               sin(dLon / 2.0) * sin(dLon / 2.0);
+    double c = 2.0 * atan2(sqrt(a), sqrt(1.0 - a));
+    return R * c;
+}
+
+// 2点間の方位角を計算（度、0-360）
+double calculateBearing(double lat1, double lon1, double lat2, double lon2) {
+    double dLon = (lon2 - lon1) * M_PI / 180.0;
+    double lat1Rad = lat1 * M_PI / 180.0;
+    double lat2Rad = lat2 * M_PI / 180.0;
+    
+    double y = sin(dLon) * cos(lat2Rad);
+    double x = cos(lat1Rad) * sin(lat2Rad) - sin(lat1Rad) * cos(lat2Rad) * cos(dLon);
+    
+    double bearing = atan2(y, x) * 180.0 / M_PI;
+    return fmod(bearing + 360.0, 360.0);  // 0-360の範囲に正規化
+}
+
+// 角度の差を計算（0-180度）
+double angleDifference(double angle1, double angle2) {
+    double diff = fabs(angle1 - angle2);
+    if (diff > 180.0) {
+        diff = 360.0 - diff;
+    }
+    return diff;
+}
+
+// フィルター1: 最悪待ち時間と期待値の差分による信号除外
+// 最悪待ち時間から期待値を引いた差分が、信号に到着した時の待ち時間より短い場合、その信号を除外
+bool filterByWorstWaitTime(int signalEdgeIdx, double arrivalTimeAtSignal) {
+    EdgeData *edge = &edgeDataArray[signalEdgeIdx];
+    if (!edge->isSignal || edge->signalCycle <= 0) return true;  // 信号でない場合は除外しない
+    
+    // 最悪待ち時間 = cycle - green（秒）
+    double worstWaitTime = (double)(edge->signalCycle - edge->signalGreen);
+    
+    // 期待値（秒）
+    double expectedWaitTime = edge->expectedWaitTime;
+    
+    // 差分 = 最悪待ち時間 - 期待値
+    double diff = worstWaitTime - expectedWaitTime;
+    
+    // 信号に到着した時の待ち時間を計算
+    // 到着時刻をサイクルで割った余りから、信号サイクル内での位置を計算
+    double cycleTime = (double)edge->signalCycle;
+    double arrivalPhase = fmod(arrivalTimeAtSignal, cycleTime);
+    double actualWaitTime = 0.0;
+    
+    // 信号の位相を考慮して待ち時間を計算
+    // phase: 青信号の開始時刻（サイクル内での位置）
+    // green: 青信号の継続時間
+    if (arrivalPhase < edge->signalPhase) {
+        // 青信号の開始前：青信号開始まで待つ
+        actualWaitTime = edge->signalPhase - arrivalPhase;
+    } else if (arrivalPhase >= edge->signalPhase + (double)edge->signalGreen) {
+        // 青信号の終了後：次のサイクルの青信号開始まで待つ
+        actualWaitTime = cycleTime - arrivalPhase + edge->signalPhase;
+    } else {
+        // 青信号中：待ち時間なし
+        actualWaitTime = 0.0;
+    }
+    
+    // 差分が実際の待ち時間より短い場合、この信号を除外
+    // つまり、実際の待ち時間が大きい（差分が小さい）場合に除外
+    bool shouldExclude = (diff < actualWaitTime);
+    
+    if (shouldExclude) {
+        fprintf(stderr, "Filter1: Excluding signal edge %d (%d-%d): diff=%.2f < actualWait=%.2f (worst=%.2f, expected=%.2f, arrivalPhase=%.2f)\n",
+                signalEdgeIdx, edge->from, edge->to, diff, actualWaitTime, worstWaitTime, expectedWaitTime, arrivalPhase);
+    }
+    
+    return !shouldExclude;  // trueなら含める、falseなら除外
+}
+
+// フィルター2: スタート地点からの方向範囲による信号除外
+bool filterByDirection(int signalEdgeIdx) {
+    if (!nodeCoords[startNode].hasCoordinates) return true;  // 座標がない場合は除外しない
+    
+    EdgeData *edge = &edgeDataArray[signalEdgeIdx];
+    
+    // 信号エッジの中点を計算
+    int signalNode1 = edge->from;
+    int signalNode2 = edge->to;
+    
+    if (!nodeCoords[signalNode1].hasCoordinates || !nodeCoords[signalNode2].hasCoordinates) {
+        return true;  // 座標がない場合は除外しない
+    }
+    
+    // 信号エッジの中点座標
+    double signalLat = (nodeCoords[signalNode1].latitude + nodeCoords[signalNode2].latitude) / 2.0;
+    double signalLon = (nodeCoords[signalNode1].longitude + nodeCoords[signalNode2].longitude) / 2.0;
+    
+    // スタート地点からゴール地点への方向（基準方向、0度とする）
+    if (!nodeCoords[endNode].hasCoordinates) return true;
+    double goalBearing = calculateBearing(
+        nodeCoords[startNode].latitude, nodeCoords[startNode].longitude,
+        nodeCoords[endNode].latitude, nodeCoords[endNode].longitude
+    );
+    
+    // スタート地点から信号への方向
+    double signalBearing = calculateBearing(
+        nodeCoords[startNode].latitude, nodeCoords[startNode].longitude,
+        signalLat, signalLon
+    );
+    
+    // ゴール方向を0度とした相対角度を計算（-180度から+180度の範囲）
+    double relativeAngle = signalBearing - goalBearing;
+    // -180度から+180度の範囲に正規化
+    while (relativeAngle > 180.0) relativeAngle -= 360.0;
+    while (relativeAngle < -180.0) relativeAngle += 360.0;
+    
+    // 角度差の絶対値が許容範囲内かチェック（左右±45度の範囲）
+    double angleDiff = fabs(relativeAngle);
+    bool shouldInclude = (angleDiff <= ANGLE_TOLERANCE);
+    
+    if (!shouldInclude) {
+        fprintf(stderr, "Filter2: Excluding signal edge %d (%d-%d): angleDiff=%.2f > tolerance=%.2f\n",
+                signalEdgeIdx, edge->from, edge->to, angleDiff, ANGLE_TOLERANCE);
+    }
+    
+    return shouldInclude;
+}
+
+// フィルター3: 遠回り経路の除外
+// 直線距離と経路距離の比、または最短経路との比較で判定
+bool filterByDetour(int *signalEdgeIndices, int signalCount, int start, int end) {
+    if (signalCount == 0) return true;  // 信号がない場合は除外しない
+    
+    // 最短経路（信号を考慮しない）を計算
+    DijkstraResult shortestPath = dijkstraWithoutSignalWait(start, end, NULL);
+    if (shortestPath.cost >= INF || shortestPath.pathLength == 0) {
+        return true;  // 最短経路が見つからない場合は除外しない
+    }
+    
+    // 最短経路の距離を計算
+    double shortestDistance = 0.0;
+    for (int i = 0; i < shortestPath.pathLength; i++) {
+        EdgeData *edge = &edgeDataArray[shortestPath.path[i]];
+        shortestDistance += edge->distance;
+    }
+    
+    // 信号を通る経路の距離を推定（各信号間の最短距離の合計）
+    double signalPathDistance = 0.0;
+    int currentNode = start;
+    
+    for (int i = 0; i < signalCount; i++) {
+        int signalEdgeIdx = signalEdgeIndices[i];
+        EdgeData *signalEdge = &edgeDataArray[signalEdgeIdx];
+        int signalFrom = signalEdge->from;
+        int signalTo = signalEdge->to;
+        
+        // 現在のノードから信号までの最短経路
+        DijkstraResult segment = dijkstraWithoutSignalWait(currentNode, signalFrom, NULL);
+        if (segment.cost >= INF || segment.pathLength == 0) {
+            segment = dijkstraWithoutSignalWait(currentNode, signalTo, NULL);
+            if (segment.cost >= INF || segment.pathLength == 0) {
+                return false;  // 経路が見つからない場合は除外
+            }
+            currentNode = signalFrom;
+        } else {
+            currentNode = signalTo;
+        }
+        
+        // セグメントの距離を加算
+        for (int j = 0; j < segment.pathLength; j++) {
+            EdgeData *edge = &edgeDataArray[segment.path[j]];
+            signalPathDistance += edge->distance;
+        }
+        
+        // 信号エッジ自体の距離を加算
+        signalPathDistance += signalEdge->distance;
+    }
+    
+    // 最後の信号からゴールまでの距離
+    DijkstraResult finalSegment = dijkstraWithoutSignalWait(currentNode, end, NULL);
+    if (finalSegment.cost >= INF || finalSegment.pathLength == 0) {
+        return false;  // 経路が見つからない場合は除外
+    }
+    for (int j = 0; j < finalSegment.pathLength; j++) {
+        EdgeData *edge = &edgeDataArray[finalSegment.path[j]];
+        signalPathDistance += edge->distance;
+    }
+    
+    // 最短経路との比較
+    double ratio = signalPathDistance / shortestDistance;
+    bool shouldExclude = (ratio > DETOUR_THRESHOLD);
+    
+    if (shouldExclude) {
+        fprintf(stderr, "Filter3: Excluding path with %d signals: ratio=%.2f > threshold=%.2f (shortest=%.2fm, signalPath=%.2fm)\n",
+                signalCount, ratio, DETOUR_THRESHOLD, shortestDistance, signalPathDistance);
+    }
+    
+    return !shouldExclude;  // trueなら含める、falseなら除外
+}
+
 // 信号情報を読み込む
 void loadSignalData(const char *filename) {
     FILE *file = fopen(filename, "r");
@@ -1060,10 +1322,14 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
     return result;
 }
 
-// 信号の組み合わせに基づいて経路を生成
+// 信号の組み合わせに基づいて経路を生成（フィルター適用版）
 YenResult generateRoutesBySignalCombinations(int start, int end) {
     YenResult result;
     result.pathCount = 0;
+    
+    // グローバル変数に設定（フィルター用）
+    startNode = start;
+    endNode = end;
     
     if (signalCount == 0) {
         // 信号がない場合は通常の最短経路を返す
@@ -1081,26 +1347,109 @@ YenResult generateRoutesBySignalCombinations(int start, int end) {
         return result;
     }
     
-    // 信号ごとに個別の期待値を使用するため、平均値は使用しない
+    // フィルター適用前の信号数を記録
+    int originalSignalCount = signalCount;
+    fprintf(stderr, "=== フィルター適用前: %d個の信号 ===\n", originalSignalCount);
     
-    // 信号の組み合わせを生成（2^signalCount - 1通り、全て通らない組み合わせを除く）
-    // 9個の信号の場合、2^9 - 1 = 511通り
-    int maxCombinations = (1 << signalCount) - 1;  // 2^signalCount - 1
+    // フィルター1と2を適用して信号を事前にフィルタリング
+    int filteredSignalEdges[MAX_SIGNALS];
+    int filteredSignalCount = 0;
+    int filter1Excluded = 0;
+    int filter2Excluded = 0;
+    
+    // スタートから各信号までの到着時刻を推定（簡易版：最短経路で計算）
+    for (int i = 0; i < signalCount; i++) {
+        int signalEdgeIdx = signalEdges[i];
+        EdgeData *signalEdge = &edgeDataArray[signalEdgeIdx];
+        
+        // フィルター2: 方向フィルター（到着時刻が不要）
+        if (!filterByDirection(signalEdgeIdx)) {
+            filter2Excluded++;
+            continue;
+        }
+        
+        // フィルター1: 最悪待ち時間フィルター（到着時刻が必要）
+        // スタートから信号までの最短経路を計算して到着時刻を推定
+        DijkstraResult toSignal = dijkstraWithoutSignalWait(start, signalEdge->from, NULL);
+        double arrivalTime = 0.0;
+        if (toSignal.cost < INF) {
+            arrivalTime = toSignal.cost;  // 秒単位
+        } else {
+            // 双方向を試す
+            toSignal = dijkstraWithoutSignalWait(start, signalEdge->to, NULL);
+            if (toSignal.cost < INF) {
+                arrivalTime = toSignal.cost;
+            }
+        }
+        
+        if (!filterByWorstWaitTime(signalEdgeIdx, arrivalTime)) {
+            filter1Excluded++;
+            continue;
+        }
+        
+        // 両方のフィルターを通過した信号を追加
+        filteredSignalEdges[filteredSignalCount++] = signalEdgeIdx;
+    }
+    
+    fprintf(stderr, "=== フィルター適用結果 ===\n");
+    fprintf(stderr, "フィルター1（最悪待ち時間）で除外: %d個\n", filter1Excluded);
+    fprintf(stderr, "フィルター2（方向）で除外: %d個\n", filter2Excluded);
+    fprintf(stderr, "フィルター適用後: %d個の信号（%d個除外）\n", 
+            filteredSignalCount, originalSignalCount - filteredSignalCount);
+    
+    if (filteredSignalCount == 0) {
+        // 全ての信号がフィルターで除外された場合は、信号を通らない最短経路を返す
+        fprintf(stderr, "全ての信号がフィルターで除外されました。信号を通らない最短経路を返します。\n");
+        DijkstraResult basePath = dijkstraWithoutSignalWait(start, end, NULL);
+        if (basePath.cost < INF && basePath.pathLength > 0) {
+            RouteMetrics baseMetrics = calculateRouteMetrics(basePath.path, basePath.pathLength);
+            Path *p = &result.paths[result.pathCount++];
+            memcpy(p->edges, basePath.path, basePath.pathLength * sizeof(int));
+            p->edgeCount = basePath.pathLength;
+            p->totalDistance = baseMetrics.totalDistance;
+            p->totalTime = baseMetrics.totalTimeWithExpected;
+            p->totalWaitTime = 0.0;
+            p->totalTimeWithExpected = baseMetrics.totalTimeWithExpected;
+        }
+        return result;
+    }
+    
+    // フィルター後の信号を使用
+    int activeSignalCount = filteredSignalCount;
+    int *activeSignalEdges = filteredSignalEdges;
+    
+    // 信号の組み合わせを生成（2^activeSignalCount - 1通り）
+    int maxCombinations = (1 << activeSignalCount) - 1;
     
     // 経路の重複チェック用
     bool seenPaths[MAX_COMBINATIONS][MAX_PATH_LENGTH];
     int seenPathLengths[MAX_COMBINATIONS];
     int seenPathCount = 0;
     
-    // 511通り全ての組み合わせを試行
+    int filter3Excluded = 0;
+    int totalCombinations = 0;
+    
+    // 全ての組み合わせを試行
     for (int combination = 1; combination <= maxCombinations && result.pathCount < MAX_COMBINATIONS; combination++) {
+        totalCombinations++;
+        
         // この組み合わせに含まれる信号エッジのリストを取得
         int requiredSignals[MAX_SIGNALS];
         int requiredSignalCount = 0;
-        for (int i = 0; i < signalCount; i++) {
+        for (int i = 0; i < activeSignalCount; i++) {
             if (combination & (1 << i)) {
-                requiredSignals[requiredSignalCount++] = signalEdges[i];
+                requiredSignals[requiredSignalCount++] = activeSignalEdges[i];
             }
+        }
+        
+        // フィルター3: 遠回り経路の除外
+        if (!filterByDetour(requiredSignals, requiredSignalCount, start, end)) {
+            filter3Excluded++;
+            if (filter3Excluded <= 10) {  // 最初の10個だけ詳細ログを出力
+                fprintf(stderr, "Filter3: Excluding combination %d with %d signals\n", 
+                        combination, requiredSignalCount);
+            }
+            continue;
         }
         
         // バリエーションを最大化するため、可能な限り多くの順序を試す
@@ -1223,7 +1572,10 @@ YenResult generateRoutesBySignalCombinations(int start, int end) {
         }
     }
     
-    fprintf(stderr, "Generated %d routes total\n", result.pathCount);
+    fprintf(stderr, "=== 最終結果 ===\n");
+    fprintf(stderr, "試行した組み合わせ数: %d\n", totalCombinations);
+    fprintf(stderr, "フィルター3（遠回り）で除外: %d個の組み合わせ\n", filter3Excluded);
+    fprintf(stderr, "生成された経路数: %d\n", result.pathCount);
     
     // 全ての経路を総推定時間でソート（最短のものを最初に）
     for (int i = 0; i < result.pathCount - 1; i++) {
@@ -1288,6 +1640,10 @@ int main(int argc, char *argv[]) {
     
     // エッジデータ（距離、勾配、信号、横断歩道情報）を読み込む
     loadRouteData("oomiya_route_inf_4.csv");
+    
+    // ノード座標を読み込む（フィルター用）
+    fprintf(stderr, "Loading node coordinates...\n");
+    loadNodeCoordinates("oomiya_point");
     
     // 信号情報を読み込む
     fprintf(stderr, "Loading signal data...\n");
