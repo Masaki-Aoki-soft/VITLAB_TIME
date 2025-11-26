@@ -466,13 +466,52 @@ export default function Home() {
 
     // パラメータ変更時にマーカーを更新
     useEffect(() => {
-        if (startMarker) {
-            setStartMarker({
-                ...startMarker,
-                startNode: params.param1,
-                endNode: params.param2,
-            });
-        }
+        // param1が変更された場合、該当ノードの位置を取得してマーカーを更新
+        const updateStartMarker = async () => {
+            const nodeId = params.param1;
+            if (!nodeId || nodeId === '') return;
+
+            // 該当ノードのGeoJSONファイルを読み込む
+            const fileName = `${nodeId}.geojson`;
+            const filePath = `/api/main_server_route/static/oomiya_point/${fileName}`;
+            
+            try {
+                const response = await fetch(filePath);
+                if (response.ok) {
+                    const geojsonData = await response.json();
+                    if (geojsonData.geometry && geojsonData.geometry.coordinates) {
+                        const [lng, lat] = geojsonData.geometry.coordinates;
+                        setStartMarker({
+                            position: [lat, lng],
+                            nodeId: nodeId,
+                            startNode: params.param1,
+                            endNode: params.param2,
+                        });
+                    }
+                } else {
+                    // ファイルが見つからない場合、既存のマーカーがあればテキストのみ更新
+                    if (startMarker) {
+                        setStartMarker({
+                            ...startMarker,
+                            startNode: params.param1,
+                            endNode: params.param2,
+                        });
+                    }
+                }
+            } catch (error) {
+                console.error('Failed to load node GeoJSON:', error);
+                // エラー時も既存のマーカーがあればテキストのみ更新
+                if (startMarker) {
+                    setStartMarker({
+                        ...startMarker,
+                        startNode: params.param1,
+                        endNode: params.param2,
+                    });
+                }
+            }
+        };
+
+        updateStartMarker();
     }, [params.param1, params.param2]);
 
     // マップクリック時の処理

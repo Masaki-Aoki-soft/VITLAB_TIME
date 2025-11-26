@@ -1,4 +1,4 @@
-/* イェンのアルゴリズムを用いたK最短経路探索（信号待ち時間考慮） */
+/* 網羅的経路探索（信号待ち時間考慮）- 条件に当てはまる経路を全て出力 */
 
 #define _GNU_SOURCE  // M_PIを使用するため
 #include <stdio.h>
@@ -17,14 +17,17 @@
 #define MAX_PATH_LENGTH 200
 #define MAX_K 5
 #define MAX_SIGNALS 50  // 信号エッジの最大数（signal_inf.csvには37個あるため余裕を持たせる）
-#define MAX_COMBINATIONS 511  // 2^9 - 1 = 511通り（9個の信号を想定）
+#define MAX_COMBINATIONS 1024 // 経路数の上限を増加（2^11 = 2048）
 #define INF DBL_MAX
 #define K_GRADIENT 0.5
 #define AVERAGE_CAR_INTERVAL 15.0
 #define SAFE_CROSSING_GAP 5.0
 #define MAX_FILENAME_LENGTH 256
 #define ANGLE_TOLERANCE 45.0  // 方向フィルターの角度許容範囲（度、ゴール方向を0度として左右±45度）
-#define DETOUR_THRESHOLD 1.5  // 遠回り判定の閾値（最短経路の1.5倍以上を遠回りと判定）
+#define DETOUR_THRESHOLD 1.3  // 遠回り判定の閾値（最短経路の1.3倍以上を遠回りと判定）- 1.5から1.3に強化
+#define MAX_SIGNALS_PER_COMBINATION 4  // 組み合わせあたりの最大信号数（フィルター4）
+#define MAX_TOTAL_EXPECTED_WAIT_TIME 90.0  // 最大合計待ち時間（秒、フィルター5）
+#define MIN_SIGNAL_DISTANCE 100.0  // 信号間の最小距離（メートル、フィルター6）
 
 // エッジ情報
 typedef struct {
@@ -78,6 +81,15 @@ int signalCount = 0;  // 信号の数
 NodeCoordinates nodeCoords[MAX_NODES];  // ノード座標
 int startNode = 0;  // スタートノード（フィルター用）
 int endNode = 0;  // エンドノード（フィルター用）
+
+// 大きな配列をグローバル変数に移動（スタックオーバーフロー防止）
+typedef struct {
+    int pathLength;
+    int edges[MAX_PATH_LENGTH];
+} PathSet;
+
+Path globalPaths[MAX_COMBINATIONS];  // 経路配列（グローバル）
+PathSet globalSeenPathSets[MAX_COMBINATIONS];  // 重複チェック用（グローバル）
 
 // グラフを初期化
 void initGraph() {
@@ -133,10 +145,46 @@ double calculateSignalWaitTimeExpected(int edgeIdx) {
     return edge->expectedWaitTime >= 0.0 ? edge->expectedWaitTime : 0.0;
 }
 
-// 信号待ち時間を計算（秒）- 各信号ごとに個別の期待値を使用
-double calculateSignalWaitTime(int edgeIdx, double arrivalTimeSeconds) {
-    // 各信号ごとに個別の期待値を計算
-    return calculateSignalWaitTimeExpected(edgeIdx);
+// 信号待ち時間を厳密に計算（秒）- 実際の到着時刻とCSVのphase、cycle、greenを使用
+// arrivalTimeSeconds: 信号への到着時刻（秒）
+// logSignalInfo: trueの場合、ログを出力する
+double calculateSignalWaitTime(int edgeIdx, double arrivalTimeSeconds, bool logSignalInfo) {
+    EdgeData *edge = &edgeDataArray[edgeIdx];
+    if (!edge->isSignal || edge->signalCycle <= 0) return 0.0;
+    
+    // 信号サイクル内での到着時刻の位置を計算
+    double cycleTime = (double)edge->signalCycle;
+    double arrivalPhase = fmod(arrivalTimeSeconds, cycleTime);
+    double actualWaitTime = 0.0;
+    bool isGreen = false;
+    
+    // 信号の位相を考慮して待ち時間を計算
+    // phase: 青信号の開始時刻（サイクル内での位置）
+    // green: 青信号の継続時間
+    if (arrivalPhase < edge->signalPhase) {
+        // 青信号の開始前：青信号開始まで待つ
+        actualWaitTime = edge->signalPhase - arrivalPhase;
+    } else if (arrivalPhase >= edge->signalPhase + (double)edge->signalGreen) {
+        // 青信号の終了後：次のサイクルの青信号開始まで待つ
+        actualWaitTime = cycleTime - arrivalPhase + edge->signalPhase;
+    } else {
+        // 青信号中：待ち時間なし
+        actualWaitTime = 0.0;
+        isGreen = true;
+    }
+    
+    // ログ出力
+    if (logSignalInfo) {
+        if (isGreen) {
+            fprintf(stderr, "Signal arrival: edgeIdx=%d (%d-%d), arrivalTime=%.2fs, arrivalPhase=%.2fs, waitTime=0.00s (GREEN)\n",
+                    edgeIdx, edge->from, edge->to, arrivalTimeSeconds, arrivalPhase);
+        } else {
+            fprintf(stderr, "Signal arrival: edgeIdx=%d (%d-%d), arrivalTime=%.2fs, arrivalPhase=%.2fs, waitTime=%.2fs\n",
+                    edgeIdx, edge->from, edge->to, arrivalTimeSeconds, arrivalPhase, actualWaitTime);
+        }
+    }
+    
+    return actualWaitTime;
 }
 
 // 横断歩道待ち時間を計算（秒）
@@ -292,7 +340,7 @@ DijkstraResult dijkstraWithSignals(int start, int end, double startTimeSeconds,
             
             EdgeData *edge = &edgeDataArray[edgeIdx];
             if (edge->isSignal) {
-                waitTime = calculateSignalWaitTime(edgeIdx, newArrivalTime);
+                waitTime = calculateSignalWaitTime(edgeIdx, newArrivalTime, false);  // ダイクストラ法内ではログ出力しない
                 newArrivalTime += waitTime;
             } else if (edge->isCrosswalk) {
                 waitTime = calculateCrosswalkWaitTime(edgeIdx, newArrivalTime);
@@ -343,6 +391,101 @@ DijkstraResult dijkstraWithSignals(int start, int end, double startTimeSeconds,
     return result;
 }
 
+// 期待値ベースのDijkstra（信号待ち時間を期待値で考慮）
+DijkstraResult dijkstraWithSignalWaitExpected(int start, int end, bool *forbiddenEdges) {
+    double distances[MAX_NODES];
+    int previous[MAX_NODES];
+    bool visited[MAX_NODES];
+    DijkstraResult result;
+    
+    // 初期化
+    for (int i = 0; i < MAX_NODES; i++) {
+        distances[i] = INF;
+        previous[i] = -1;
+        visited[i] = false;
+    }
+    distances[start] = 0.0;
+    
+    // ダイクストラ法のメインループ
+    while (true) {
+        int minNode = -1;
+        double minDist = INF;
+        
+        // 未訪問ノードで最小距離のものを探す
+        for (int i = 0; i < MAX_NODES; i++) {
+            if (!visited[i] && distances[i] < minDist) {
+                minDist = distances[i];
+                minNode = i;
+            }
+        }
+        
+        if (minNode == -1 || minNode == end) break;
+        visited[minNode] = true;
+        
+        // 隣接ノードを更新
+        for (int i = 0; i < graph[minNode].edge_count; i++) {
+            int neighbor = graph[minNode].edges[i].node;
+            if (visited[neighbor]) continue;
+            
+            int edgeIdx = graph[minNode].edges[i].edgeIndex;
+            if (forbiddenEdges && forbiddenEdges[edgeIdx]) continue;
+            
+            double edgeTime = getEdgeTimeSeconds(minNode, neighbor);
+            if (edgeTime >= INF) continue;
+            
+            EdgeData *edge = &edgeDataArray[edgeIdx];
+            double waitTime = 0.0;
+            
+            // 信号エッジの場合、期待待ち時間を加算
+            if (edge->isSignal) {
+                waitTime = edge->expectedWaitTime;  // 期待値を使用（秒）
+            } else if (edge->isCrosswalk) {
+                waitTime = calculateCrosswalkWaitTime(edgeIdx, 0.0);  // 到着時刻は不要
+            }
+            
+            double newCost = minDist + edgeTime + waitTime;
+            if (newCost < distances[neighbor]) {
+                distances[neighbor] = newCost;
+                previous[neighbor] = minNode;
+            }
+        }
+    }
+    
+    // 経路を再構築
+    result.cost = distances[end];
+    result.arrivalTime = distances[end];
+    result.pathLength = 0;
+    
+    if (distances[end] < INF) {
+        int currentNode = end;
+        int pathNodes[MAX_PATH_LENGTH];
+        int pathNodeCount = 0;
+        
+        while (currentNode != -1 && currentNode != start) {
+            pathNodes[pathNodeCount++] = currentNode;
+            currentNode = previous[currentNode];
+            if (currentNode == -1) {
+                result.cost = INF;
+                result.pathLength = 0;
+                return result;
+            }
+        }
+        pathNodes[pathNodeCount++] = start;
+        
+        // エッジに変換
+        for (int i = pathNodeCount - 1; i > 0; i--) {
+            int from = pathNodes[i];
+            int to = pathNodes[i - 1];
+            int edgeIdx = findEdgeIndex(from, to);
+            if (edgeIdx >= 0 && result.pathLength < MAX_PATH_LENGTH) {
+                result.path[result.pathLength++] = edgeIdx;
+            }
+        }
+    }
+    
+    return result;
+}
+
 // 経路メトリクスを計算
 typedef struct {
     double totalDistance;
@@ -376,6 +519,183 @@ RouteMetrics calculateRouteMetrics(int *edgeIndices, int edgeCount) {
     return metrics;
 }
 
+// 経路を順番にたどって、各信号への到着時刻を計算し、厳密な待ち時間を合計（秒）
+// 経路のエッジを順番にたどり、各信号への到着時刻を追跡して待ち時間を計算
+double calculateTotalSignalWaitTimeFromPath(int *edgeIndices, int edgeCount) {
+    double totalSignalWaitTime = 0.0;
+    double currentArrivalTime = 0.0;  // 現在の到着時刻（秒）
+    
+    for (int i = 0; i < edgeCount; i++) {
+        EdgeData *edge = &edgeDataArray[edgeIndices[i]];
+        
+        // エッジの移動時間を計算（秒）
+        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * edge->gradient);
+        if (adjustedSpeed > 0) {
+            double edgeTime = (edge->distance / adjustedSpeed) * 60.0;  // 秒に変換
+            currentArrivalTime += edgeTime;
+        }
+        
+        // 信号エッジの場合、到着時刻を使って待ち時間を厳密に計算
+        if (edge->isSignal) {
+            double signalWaitTime = calculateSignalWaitTime(edgeIndices[i], currentArrivalTime, true);  // ログ出力
+            totalSignalWaitTime += signalWaitTime;
+            currentArrivalTime += signalWaitTime;  // 待ち時間を加算して次のエッジの到着時刻を更新
+        }
+    }
+    
+    return totalSignalWaitTime;  // 秒単位で返す
+}
+
+// 期待値ベースのコスト計算（距離 + 期待待ち時間）
+double calculatePathCostWithExpectedWait(int *edgeIndices, int edgeCount) {
+    double totalTime = 0.0;
+    double totalExpectedWaitTime = 0.0;
+    
+    for (int i = 0; i < edgeCount; i++) {
+        EdgeData *edge = &edgeDataArray[edgeIndices[i]];
+        
+        // 移動時間を計算（秒）
+        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * edge->gradient);
+        if (adjustedSpeed > 0) {
+            totalTime += (edge->distance / adjustedSpeed) * 60.0;  // 秒に変換
+        }
+        
+        // 信号エッジの場合、期待待ち時間を加算
+        if (edge->isSignal) {
+            totalExpectedWaitTime += edge->expectedWaitTime;  // 秒
+        }
+    }
+    
+    // コスト = 移動時間 + 期待待ち時間（秒）
+    return totalTime + totalExpectedWaitTime;
+}
+
+// 経路の距離を計算
+double calculatePathDistance(int *edgeIndices, int edgeCount) {
+    double totalDistance = 0.0;
+    for (int i = 0; i < edgeCount; i++) {
+        EdgeData *edge = &edgeDataArray[edgeIndices[i]];
+        totalDistance += edge->distance;
+    }
+    return totalDistance;
+}
+
+// 経路の移動時間を計算（信号待ち時間なし）
+double calculatePathTime(int *edgeIndices, int edgeCount) {
+    double totalTime = 0.0;
+    for (int i = 0; i < edgeCount; i++) {
+        EdgeData *edge = &edgeDataArray[edgeIndices[i]];
+        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * edge->gradient);
+        if (adjustedSpeed > 0) {
+            totalTime += (edge->distance / adjustedSpeed) * 60.0;  // 秒に変換
+        }
+    }
+    return totalTime;
+}
+
+// 最短経路を実際に通った場合の待ち時間を計算
+double calculateActualWaitTimeOnShortestPath(DijkstraResult shortestPath) {
+    double totalWaitTime = 0.0;
+    double currentArrivalTime = 0.0;
+    
+    for (int i = 0; i < shortestPath.pathLength; i++) {
+        EdgeData *edge = &edgeDataArray[shortestPath.path[i]];
+        
+        // エッジの移動時間を加算
+        double edgeTime = getEdgeTimeSeconds(edge->from, edge->to);
+        currentArrivalTime += edgeTime;
+        
+        // 信号エッジの場合、実際の待ち時間を計算
+        if (edge->isSignal) {
+            double waitTime = calculateSignalWaitTime(shortestPath.path[i], currentArrivalTime, false);
+            totalWaitTime += waitTime;
+            currentArrivalTime += waitTime;
+        }
+    }
+    
+    return totalWaitTime;
+}
+
+// 上限時間を計算（重み付き平均を使用）
+double calculateMaxTime(int start, int end) {
+    // 最短経路を計算（信号待ち時間なし）
+    DijkstraResult shortestPath = dijkstraWithoutSignalWait(start, end, NULL);
+    if (shortestPath.cost >= INF || shortestPath.pathLength == 0) {
+        return INF;
+    }
+    
+    double shortestPathTime = shortestPath.cost;  // 移動時間のみ（秒）
+    
+    // 最短経路で通る信号の最悪待ち時間と期待値を計算
+    double totalWorstWaitTime = 0.0;
+    double totalExpectedWaitTime = 0.0;
+    
+    for (int i = 0; i < shortestPath.pathLength; i++) {
+        EdgeData *edge = &edgeDataArray[shortestPath.path[i]];
+        if (edge->isSignal) {
+            totalWorstWaitTime += (double)(edge->signalCycle - edge->signalGreen);
+            totalExpectedWaitTime += edge->expectedWaitTime;
+        }
+    }
+    
+    // 実際の待ち時間を計算（より正確）
+    double actualWaitTime = calculateActualWaitTimeOnShortestPath(shortestPath);
+    
+    // 重み付き平均: α × 実際の待ち時間 + (1-α) × 最悪待ち時間
+    // α = 0.7（実際の待ち時間を重視）
+    double alpha = 0.7;
+    double estimatedWaitTime = alpha * actualWaitTime + (1 - alpha) * totalWorstWaitTime;
+    
+    // 上限 = 最短経路の時間 + 推定待ち時間
+    double maxTime = shortestPathTime + estimatedWaitTime;
+    
+    return maxTime;
+}
+
+// 経路内の各信号の待ち時間が差分（最悪待ち時間 - 期待値）より長いかチェック
+// 1つでも差分より長い信号があればfalseを返す（経路を除外）
+bool checkPathSignalWaitTimes(int *edgeIndices, int edgeCount) {
+    double currentArrivalTime = 0.0;  // 現在の到着時刻（秒）
+    
+    for (int i = 0; i < edgeCount; i++) {
+        EdgeData *edge = &edgeDataArray[edgeIndices[i]];
+        
+        // エッジの移動時間を計算（秒）
+        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * edge->gradient);
+        if (adjustedSpeed > 0) {
+            double edgeTime = (edge->distance / adjustedSpeed) * 60.0;  // 秒に変換
+            currentArrivalTime += edgeTime;
+        }
+        
+        // 信号エッジの場合、待ち時間を計算して差分と比較
+        if (edge->isSignal && edge->signalCycle > 0) {
+            // 最悪待ち時間 = cycle - green（秒）
+            double worstWaitTime = (double)(edge->signalCycle - edge->signalGreen);
+            
+            // 期待値（秒）
+            double expectedWaitTime = edge->expectedWaitTime;
+            
+            // 差分 = 最悪待ち時間 - 期待値
+            double diff = worstWaitTime - expectedWaitTime;
+            
+            // 実際の待ち時間を計算
+            double actualWaitTime = calculateSignalWaitTime(edgeIndices[i], currentArrivalTime, false);  // ログ出力なし
+            
+            // 待ち時間が差分より長い場合、この経路を除外
+            if (actualWaitTime > diff) {
+                fprintf(stderr, "Path excluded: signal edge %d (%d-%d) waitTime=%.2fs > diff=%.2fs (worst=%.2f, expected=%.2f, arrivalTime=%.2fs)\n",
+                        edgeIndices[i], edge->from, edge->to, actualWaitTime, diff, worstWaitTime, expectedWaitTime, currentArrivalTime);
+                return false;  // 経路を除外
+            }
+            
+            // 待ち時間を加算して次のエッジの到着時刻を更新
+            currentArrivalTime += actualWaitTime;
+        }
+    }
+    
+    return true;  // すべての信号が差分以下なので経路を含める
+}
+
 // エッジパスをノードパスに変換
 void edgePathToNodePath(int *edgeIndices, int edgeCount, int startNode, 
                         int *nodePath, int *nodeCount) {
@@ -396,12 +716,289 @@ void edgePathToNodePath(int *edgeIndices, int edgeCount, int startNode,
     }
 }
 
-// イェンのアルゴリズム（信号組み合わせ用に拡張）
-typedef struct {
-    Path paths[MAX_COMBINATIONS];  // 511通り全てを保存可能に
-    int pathCount;
-} YenResult;
+// 経路探索結果（網羅的探索用）
+// 大きな配列をグローバル変数に移動（スタックオーバーフロー防止）
+Path globalPaths[MAX_COMBINATIONS];  // 経路配列（グローバル）
 
+typedef struct {
+    Path *paths;  // グローバル配列へのポインタ
+    int pathCount;
+} YenResult;  // 型名は互換性のため維持
+
+// 2段階Yen'sアルゴリズム（期待値ベースで探索し、実際の待ち時間で再評価）
+YenResult yensAlgorithmTwoStage(int start, int end, int K) {
+    YenResult result;
+    result.paths = globalPaths;
+    result.pathCount = 0;
+    
+    // ステップ1: 上限時間を計算
+    double maxTime = calculateMaxTime(start, end);
+    if (maxTime >= INF) {
+        fprintf(stderr, "Error: Cannot calculate max time\n");
+        return result;
+    }
+    fprintf(stderr, "=== 2段階Yen'sアルゴリズム開始 ===\n");
+    fprintf(stderr, "上限時間: %.2f秒 (最短経路の時間 + 推定待ち時間)\n", maxTime);
+    
+    // ステップ2: 期待値ベースで最短経路を計算
+    DijkstraResult basePath = dijkstraWithSignalWaitExpected(start, end, NULL);
+    if (basePath.cost >= INF || basePath.pathLength == 0) {
+        fprintf(stderr, "Error: No path found\n");
+        return result;
+    }
+    
+    // 候補経路を保存する配列
+    Path candidates[MAX_COMBINATIONS];
+    int candidateCount = 0;
+    
+    // 最短経路を第1候補として追加（上限チェックを緩和）
+    double baseCost = calculatePathCostWithExpectedWait(basePath.path, basePath.pathLength);
+    // 上限チェックをコメントアウト（期待値ベースの候補を全て出力）
+    // if (baseCost <= maxTime) {
+        Path *p = &candidates[candidateCount++];
+        memcpy(p->edges, basePath.path, basePath.pathLength * sizeof(int));
+        p->edgeCount = basePath.pathLength;
+        p->totalDistance = calculatePathDistance(basePath.path, basePath.pathLength);
+        p->totalTime = baseCost;
+    // }
+    
+    // K-1個の追加経路を探索
+    for (int k = 1; k < K && candidateCount < MAX_COMBINATIONS; k++) {
+        if (k - 1 >= candidateCount) break;
+        Path *previousPath = &candidates[k - 1];
+        if (previousPath->edgeCount == 0) break;
+        
+        // ノードパスに変換
+        int nodePath[MAX_PATH_LENGTH];
+        int nodeCount = 0;
+        nodePath[nodeCount++] = start;
+        int currentNode = start;
+        
+        for (int i = 0; i < previousPath->edgeCount; i++) {
+            EdgeData *edge = &edgeDataArray[previousPath->edges[i]];
+            if (edge->from == currentNode) {
+                currentNode = edge->to;
+            } else if (edge->to == currentNode) {
+                currentNode = edge->from;
+            } else {
+                break;
+            }
+            nodePath[nodeCount++] = currentNode;
+        }
+        
+        if (nodeCount < 2) break;
+        
+        // 各ノードから代替経路を探索
+        Path newCandidates[MAX_EDGES];
+        int newCandidateCount = 0;
+        
+        for (int j = 0; j < nodeCount - 1 && newCandidateCount < MAX_EDGES; j++) {
+            int spurNode = nodePath[j];
+            
+            // ルートパスを構築（スタートからspurNodeまで）
+            int rootPathEdges[MAX_PATH_LENGTH];
+            int rootPathLength = 0;
+            for (int m = 0; m < j; m++) {
+                if (m < previousPath->edgeCount) {
+                    rootPathEdges[rootPathLength++] = previousPath->edges[m];
+                }
+            }
+            
+            // 禁止エッジを設定
+            bool forbiddenEdges[MAX_EDGES];
+            for (int m = 0; m < MAX_EDGES; m++) {
+                forbiddenEdges[m] = false;
+            }
+            // ルートパスのエッジを禁止
+            for (int m = 0; m < rootPathLength; m++) {
+                forbiddenEdges[rootPathEdges[m]] = true;
+            }
+            // 前の経路のj番目のエッジを禁止
+            if (j < previousPath->edgeCount) {
+                forbiddenEdges[previousPath->edges[j]] = true;
+            }
+            // 既存の候補経路のj番目のエッジを禁止
+            for (int p = 0; p < candidateCount; p++) {
+                if (candidates[p].edgeCount > j) {
+                    forbiddenEdges[candidates[p].edges[j]] = true;
+                }
+            }
+            
+            // スパー経路を探索（期待値ベース）
+            DijkstraResult spurPath = dijkstraWithSignalWaitExpected(spurNode, end, forbiddenEdges);
+            
+            if (spurPath.cost < INF && spurPath.pathLength > 0) {
+                // 候補経路を構築
+                int candidateEdges[MAX_PATH_LENGTH];
+                int candidateEdgeCount = 0;
+                
+                // ルートパスのエッジを追加
+                for (int m = 0; m < rootPathLength; m++) {
+                    if (candidateEdgeCount < MAX_PATH_LENGTH) {
+                        candidateEdges[candidateEdgeCount++] = rootPathEdges[m];
+                    }
+                }
+                
+                // スパー経路のエッジを追加（重複チェック）
+                bool seen[MAX_EDGES];
+                for (int m = 0; m < MAX_EDGES; m++) {
+                    seen[m] = false;
+                }
+                for (int m = 0; m < rootPathLength; m++) {
+                    seen[rootPathEdges[m]] = true;
+                }
+                
+                for (int m = 0; m < spurPath.pathLength; m++) {
+                    if (!seen[spurPath.path[m]] && candidateEdgeCount < MAX_PATH_LENGTH) {
+                        candidateEdges[candidateEdgeCount++] = spurPath.path[m];
+                        seen[spurPath.path[m]] = true;
+                    }
+                }
+                
+                // 重複チェック（既存の候補と比較）
+                bool isDuplicate = false;
+                for (int c = 0; c < newCandidateCount; c++) {
+                    if (newCandidates[c].edgeCount == candidateEdgeCount) {
+                        bool same = true;
+                        // エッジをソートして比較
+                        int sorted1[MAX_PATH_LENGTH];
+                        int sorted2[MAX_PATH_LENGTH];
+                        memcpy(sorted1, candidateEdges, candidateEdgeCount * sizeof(int));
+                        memcpy(sorted2, newCandidates[c].edges, candidateEdgeCount * sizeof(int));
+                        
+                        // 簡単なソート
+                        for (int c1 = 0; c1 < candidateEdgeCount - 1; c1++) {
+                            for (int c2 = c1 + 1; c2 < candidateEdgeCount; c2++) {
+                                if (sorted1[c1] > sorted1[c2]) {
+                                    int temp = sorted1[c1];
+                                    sorted1[c1] = sorted1[c2];
+                                    sorted1[c2] = temp;
+                                }
+                                if (sorted2[c1] > sorted2[c2]) {
+                                    int temp = sorted2[c1];
+                                    sorted2[c1] = sorted2[c2];
+                                    sorted2[c2] = temp;
+                                }
+                            }
+                        }
+                        
+                        for (int m = 0; m < candidateEdgeCount; m++) {
+                            if (sorted1[m] != sorted2[m]) {
+                                same = false;
+                                break;
+                            }
+                        }
+                        if (same) {
+                            isDuplicate = true;
+                            break;
+                        }
+                    }
+                }
+                
+                // 既存の結果と比較
+                if (!isDuplicate) {
+                    for (int p = 0; p < candidateCount; p++) {
+                        if (candidates[p].edgeCount == candidateEdgeCount) {
+                            bool same = true;
+                            for (int m = 0; m < candidateEdgeCount; m++) {
+                                if (candidateEdges[m] != candidates[p].edges[m]) {
+                                    same = false;
+                                    break;
+                                }
+                            }
+                            if (same) {
+                                isDuplicate = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (!isDuplicate && newCandidateCount < MAX_EDGES) {
+                    double candidateCost = calculatePathCostWithExpectedWait(candidateEdges, candidateEdgeCount);
+                    // 上限チェックをコメントアウト（期待値ベースの候補を全て出力）
+                    // if (candidateCost <= maxTime) {
+                        Path *cand = &newCandidates[newCandidateCount++];
+                        memcpy(cand->edges, candidateEdges, candidateEdgeCount * sizeof(int));
+                        cand->edgeCount = candidateEdgeCount;
+                        cand->totalDistance = calculatePathDistance(candidateEdges, candidateEdgeCount);
+                        cand->totalTime = candidateCost;
+                    // }
+                }
+            }
+        }
+        
+        if (newCandidateCount == 0) break;
+        
+        // 候補をソート（コスト優先）
+        for (int c1 = 0; c1 < newCandidateCount - 1; c1++) {
+            for (int c2 = c1 + 1; c2 < newCandidateCount; c2++) {
+                if (newCandidates[c1].totalTime > newCandidates[c2].totalTime) {
+                    Path temp = newCandidates[c1];
+                    newCandidates[c1] = newCandidates[c2];
+                    newCandidates[c2] = temp;
+                }
+            }
+        }
+        
+        // 最短候補を追加
+        if (candidateCount < MAX_COMBINATIONS) {
+            candidates[candidateCount++] = newCandidates[0];
+        }
+    }
+    
+    fprintf(stderr, "第1段階完了: %d個の候補経路を生成\n", candidateCount);
+    
+    // ステップ3: 期待値ベースの候補を全て出力
+    // 厳密な待ち時間の計算はコメントアウト（期待値のみを使用）
+    for (int i = 0; i < candidateCount; i++) {
+        Path *path = &candidates[i];
+        
+        // 期待値ベースのコストを使用（既に計算済み）
+        double expectedTime = calculatePathTime(path->edges, path->edgeCount);
+        double expectedWaitTime = 0.0;
+        
+        // 期待値ベースの待ち時間を計算
+        for (int j = 0; j < path->edgeCount; j++) {
+            EdgeData *edge = &edgeDataArray[path->edges[j]];
+            if (edge->isSignal) {
+                expectedWaitTime += edge->expectedWaitTime;
+            }
+        }
+        
+        // 厳密な待ち時間の計算はコメントアウト
+        /*
+        // 実際の経路をたどって待ち時間を計算
+        double actualTime = calculatePathTime(path->edges, path->edgeCount);
+        double actualWaitTime = calculateTotalSignalWaitTimeFromPath(path->edges, path->edgeCount);
+        double totalTime = actualTime + actualWaitTime;
+        
+        // 上限チェック
+        if (totalTime <= maxTime) {
+        */
+        
+        // 期待値ベースの候補を全て結果に追加
+        Path *p = &result.paths[result.pathCount++];
+        memcpy(p->edges, path->edges, path->edgeCount * sizeof(int));
+        p->edgeCount = path->edgeCount;
+        p->totalDistance = path->totalDistance;
+        p->totalTime = expectedTime / 60.0;  // 分に変換（移動時間のみ）
+        p->totalWaitTime = expectedWaitTime / 60.0;  // 分に変換（期待値ベースの待ち時間）
+        p->totalTimeWithExpected = (expectedTime + expectedWaitTime) / 60.0;  // 分に変換（期待値ベースの合計時間）
+        /*
+        }
+        */
+    }
+    
+    fprintf(stderr, "第2段階完了: %d個の経路を出力（期待値ベース）\n", result.pathCount);
+    fprintf(stderr, "=== 2段階Yen'sアルゴリズム終了 ===\n");
+    
+    return result;
+}
+
+// イェンのアルゴリズム（K最短経路の順次探索）- 現在は使用していない（網羅的探索に変更）
+// 将来の参考用にコメントアウトして保持
+/*
 YenResult yensAlgorithm(int start, int end, int *basePathEdges, int basePathLength, int k) {
     YenResult result;
     result.pathCount = 0;
@@ -611,6 +1208,7 @@ YenResult yensAlgorithm(int start, int end, int *basePathEdges, int basePathLeng
     
     return result;
 }
+*/
 
 // result.csvからグラフを構築（重み情報を使用）
 void loadGraphFromResult(const char *filename) {
@@ -852,6 +1450,11 @@ bool filterByWorstWaitTime(int signalEdgeIdx, double arrivalTimeAtSignal) {
     // 差分 = 最悪待ち時間 - 期待値
     double diff = worstWaitTime - expectedWaitTime;
     
+    // 最適化: 差分が負または非常に小さい場合は早期除外（計算をスキップ）
+    if (diff <= 0.0) {
+        return false;  // 差分が0以下なら常に除外
+    }
+    
     // 信号に到着した時の待ち時間を計算
     // 到着時刻をサイクルで割った余りから、信号サイクル内での位置を計算
     double cycleTime = (double)edge->signalCycle;
@@ -876,10 +1479,11 @@ bool filterByWorstWaitTime(int signalEdgeIdx, double arrivalTimeAtSignal) {
     // つまり、実際の待ち時間が大きい（差分が小さい）場合に除外
     bool shouldExclude = (diff < actualWaitTime);
     
-    if (shouldExclude) {
-        fprintf(stderr, "Filter1: Excluding signal edge %d (%d-%d): diff=%.2f < actualWait=%.2f (worst=%.2f, expected=%.2f, arrivalPhase=%.2f)\n",
-                signalEdgeIdx, edge->from, edge->to, diff, actualWaitTime, worstWaitTime, expectedWaitTime, arrivalPhase);
-    }
+    // ログ出力を削減（デバッグ時のみ）
+    // if (shouldExclude) {
+    //     fprintf(stderr, "Filter1: Excluding signal edge %d (%d-%d): diff=%.2f < actualWait=%.2f\n",
+    //             signalEdgeIdx, edge->from, edge->to, diff, actualWaitTime);
+    // }
     
     return !shouldExclude;  // trueなら含める、falseなら除外
 }
@@ -925,19 +1529,32 @@ bool filterByDirection(int signalEdgeIdx) {
     double angleDiff = fabs(relativeAngle);
     bool shouldInclude = (angleDiff <= ANGLE_TOLERANCE);
     
-    if (!shouldInclude) {
-        fprintf(stderr, "Filter2: Excluding signal edge %d (%d-%d): angleDiff=%.2f > tolerance=%.2f\n",
-                signalEdgeIdx, edge->from, edge->to, angleDiff, ANGLE_TOLERANCE);
-    }
+    // ログ出力を削減（デバッグ時のみ）
+    // if (!shouldInclude) {
+    //     fprintf(stderr, "Filter2: Excluding signal edge %d (%d-%d): angleDiff=%.2f > tolerance=%.2f\n",
+    //             signalEdgeIdx, edge->from, edge->to, angleDiff, ANGLE_TOLERANCE);
+    // }
     
     return shouldInclude;
 }
 
-// フィルター3: 遠回り経路の除外
-// 直線距離と経路距離の比、または最短経路との比較で判定
+// フィルター3: 遠回り経路の除外（削除済み - フィルター5と7に置き換え）
+// 2段階フィルタリングで処理時間を短縮：
+// 第1段階（高速）: 直線距離ベースで推定し、明らかに遠回りの組み合わせを除外
+// 第2段階（正確）: 第1段階を通過した組み合わせのみDijkstraで正確に計算
+// 最適化: 最短経路距離をキャッシュして重複計算を削減
+static double cachedShortestDistance = -1.0;
+static int cachedStart = -1;
+static int cachedEnd = -1;
+
 bool filterByDetour(int *signalEdgeIndices, int signalCount, int start, int end) {
     if (signalCount == 0) return true;  // 信号がない場合は除外しない
     
+    // 最短経路距離をキャッシュ（start/endが同じ場合は再利用）
+    double shortestDistance;
+    if (cachedStart == start && cachedEnd == end && cachedShortestDistance >= 0.0) {
+        shortestDistance = cachedShortestDistance;
+    } else {
     // 最短経路（信号を考慮しない）を計算
     DijkstraResult shortestPath = dijkstraWithoutSignalWait(start, end, NULL);
     if (shortestPath.cost >= INF || shortestPath.pathLength == 0) {
@@ -945,64 +1562,269 @@ bool filterByDetour(int *signalEdgeIndices, int signalCount, int start, int end)
     }
     
     // 最短経路の距離を計算
-    double shortestDistance = 0.0;
+        shortestDistance = 0.0;
     for (int i = 0; i < shortestPath.pathLength; i++) {
         EdgeData *edge = &edgeDataArray[shortestPath.path[i]];
         shortestDistance += edge->distance;
     }
     
-    // 信号を通る経路の距離を推定（各信号間の最短距離の合計）
-    double signalPathDistance = 0.0;
-    int currentNode = start;
+        // キャッシュに保存
+        cachedShortestDistance = shortestDistance;
+        cachedStart = start;
+        cachedEnd = end;
+    }
     
+    // === 第1段階: 直線距離ベースの高速フィルタリング ===
+    // 座標が利用可能な場合、直線距離で推定して早期除外
+    if (nodeCoords[start].hasCoordinates && nodeCoords[end].hasCoordinates) {
+        double straightLineDistance = 0.0;
+        int lastNode = start;
+        
+        // スタート→信号1→信号2→...→ゴールの直線距離の合計を計算
     for (int i = 0; i < signalCount; i++) {
         int signalEdgeIdx = signalEdgeIndices[i];
         EdgeData *signalEdge = &edgeDataArray[signalEdgeIdx];
         int signalFrom = signalEdge->from;
         int signalTo = signalEdge->to;
         
-        // 現在のノードから信号までの最短経路
-        DijkstraResult segment = dijkstraWithoutSignalWait(currentNode, signalFrom, NULL);
-        if (segment.cost >= INF || segment.pathLength == 0) {
-            segment = dijkstraWithoutSignalWait(currentNode, signalTo, NULL);
-            if (segment.cost >= INF || segment.pathLength == 0) {
-                return false;  // 経路が見つからない場合は除外
+            // 前のノードから信号までの直線距離を計算
+            // 信号のfrom/toのうち、前のノードに近い方を選択
+            double distToFrom = INF;
+            double distToTo = INF;
+            
+            if (nodeCoords[lastNode].hasCoordinates) {
+                if (nodeCoords[signalFrom].hasCoordinates) {
+                    distToFrom = calculateDistance(
+                        nodeCoords[lastNode].latitude, nodeCoords[lastNode].longitude,
+                        nodeCoords[signalFrom].latitude, nodeCoords[signalFrom].longitude
+                    );
+                }
+                if (nodeCoords[signalTo].hasCoordinates) {
+                    distToTo = calculateDistance(
+                        nodeCoords[lastNode].latitude, nodeCoords[lastNode].longitude,
+                        nodeCoords[signalTo].latitude, nodeCoords[signalTo].longitude
+                    );
+                }
             }
-            currentNode = signalFrom;
+            
+            // 近い方の距離を加算
+            if (distToFrom < distToTo) {
+                straightLineDistance += distToFrom;
+                lastNode = signalTo;  // 信号を通過した後のノード
+            } else if (distToTo < INF) {
+                straightLineDistance += distToTo;
+                lastNode = signalFrom;
         } else {
-            currentNode = signalTo;
+                // 座標がない場合は第2段階に進む
+                break;
+            }
         }
         
-        // セグメントの距離を加算
-        for (int j = 0; j < segment.pathLength; j++) {
-            EdgeData *edge = &edgeDataArray[segment.path[j]];
-            signalPathDistance += edge->distance;
+        // 最後の信号からゴールまでの直線距離
+        if (nodeCoords[lastNode].hasCoordinates && nodeCoords[end].hasCoordinates) {
+            straightLineDistance += calculateDistance(
+                nodeCoords[lastNode].latitude, nodeCoords[lastNode].longitude,
+                nodeCoords[end].latitude, nodeCoords[end].longitude
+            );
         }
         
-        // 信号エッジ自体の距離を加算
-        signalPathDistance += signalEdge->distance;
+        // 直線距離ベースの比率を計算（実際の経路は直線より長いため、1.2倍のマージンを考慮）
+        // 直線距離 × 1.2 が最短経路 × 閾値を超える場合は除外
+        double estimatedPathDistance = straightLineDistance * 1.2;  // マージン係数
+        double estimatedRatio = estimatedPathDistance / shortestDistance;
+        
+        // 第1段階のみで判定（Dijkstra計算をスキップして高速化）
+        // estimatedRatio > DETOUR_THRESHOLD の場合、実際の経路は閾値を超える可能性が高い
+        // マージン係数1.2を考慮して、より厳しい閾値を使用
+        if (estimatedRatio > DETOUR_THRESHOLD) {
+            return false;  // 早期除外（Dijkstra計算をスキップ）
+        }
+        // estimatedRatio <= DETOUR_THRESHOLD の場合は含める
+    } else {
+        // 座標がない場合は、第2段階（Dijkstra計算）を実行
+        // ただし、処理時間を考慮して簡略化
+        // ここでは座標がない場合のみDijkstra計算を行う
+        // 通常は座標があるため、この分岐はほとんど実行されない
     }
     
-    // 最後の信号からゴールまでの距離
-    DijkstraResult finalSegment = dijkstraWithoutSignalWait(currentNode, end, NULL);
-    if (finalSegment.cost >= INF || finalSegment.pathLength == 0) {
-        return false;  // 経路が見つからない場合は除外
+    // 第2段階（Dijkstra計算）はスキップして、第1段階のみで判定
+    // 処理時間を短縮するため、Dijkstra計算による正確な判定は行わない
+    return true;  // 第1段階を通過した場合は含める
+}
+
+// フィルター4: 信号数の上限による除外
+// 一定数以上の信号を通る組み合わせを除外（複雑すぎる経路を除外）
+bool filterBySignalCount(int signalCount) {
+    if (signalCount > MAX_SIGNALS_PER_COMBINATION) {
+        return false;  // 除外
     }
-    for (int j = 0; j < finalSegment.pathLength; j++) {
-        EdgeData *edge = &edgeDataArray[finalSegment.path[j]];
-        signalPathDistance += edge->distance;
+    return true;  // 含める
+}
+
+// フィルター5: 信号待ち時間の合計による除外
+// 期待値の合計が一定以上（例：90秒以上）の組み合わせを除外
+bool filterByTotalWaitTime(int *signalEdgeIndices, int signalCount) {
+    double totalExpectedWaitTime = 0.0;
+    for (int i = 0; i < signalCount; i++) {
+        EdgeData *edge = &edgeDataArray[signalEdgeIndices[i]];
+        totalExpectedWaitTime += edge->expectedWaitTime;
+    }
+    if (totalExpectedWaitTime > MAX_TOTAL_EXPECTED_WAIT_TIME) {
+        return false;  // 除外
+    }
+    return true;  // 含める
+}
+
+// フィルター6: 信号間の距離による除外
+// 信号間が近すぎる（例：100m以内）組み合わせを除外
+bool filterBySignalProximity(int *signalEdgeIndices, int signalCount) {
+    if (signalCount < 2) return true;  // 信号が1個以下の場合は除外しない
+    
+    int closePairs = 0;  // 近接する信号ペアの数
+    
+    for (int i = 0; i < signalCount; i++) {
+        EdgeData *edge1 = &edgeDataArray[signalEdgeIndices[i]];
+        int signal1From = edge1->from;
+        int signal1To = edge1->to;
+        
+        // 信号1の中点座標を計算
+        double signal1Lat, signal1Lon;
+        if (nodeCoords[signal1From].hasCoordinates && nodeCoords[signal1To].hasCoordinates) {
+            signal1Lat = (nodeCoords[signal1From].latitude + nodeCoords[signal1To].latitude) / 2.0;
+            signal1Lon = (nodeCoords[signal1From].longitude + nodeCoords[signal1To].longitude) / 2.0;
+        } else {
+            continue;  // 座標がない場合はスキップ
+        }
+        
+        // 他の信号との距離をチェック
+        for (int j = i + 1; j < signalCount; j++) {
+            EdgeData *edge2 = &edgeDataArray[signalEdgeIndices[j]];
+            int signal2From = edge2->from;
+            int signal2To = edge2->to;
+            
+            // 信号2の中点座標を計算
+            if (nodeCoords[signal2From].hasCoordinates && nodeCoords[signal2To].hasCoordinates) {
+                double signal2Lat = (nodeCoords[signal2From].latitude + nodeCoords[signal2To].latitude) / 2.0;
+                double signal2Lon = (nodeCoords[signal2From].longitude + nodeCoords[signal2To].longitude) / 2.0;
+                
+                // 信号間の距離を計算
+                double distance = calculateDistance(signal1Lat, signal1Lon, signal2Lat, signal2Lon);
+                
+                if (distance < MIN_SIGNAL_DISTANCE) {
+                    closePairs++;
+                }
+            }
+        }
     }
     
-    // 最短経路との比較
-    double ratio = signalPathDistance / shortestDistance;
-    bool shouldExclude = (ratio > DETOUR_THRESHOLD);
+    // 近接する信号ペアが2組以上ある場合は除外
+    if (closePairs >= 2) {
+        return false;  // 除外
+    }
+    return true;  // 含める
+}
+
+// フィルター7: 信号の順序の合理性チェック
+// 地理的に不合理な順序（後戻り）の組み合わせを除外
+// 信号の位置をスタートからの距離でソートし、その順序と大きく異なる順列を除外
+bool filterBySignalOrder(int *signalEdgeIndices, int signalCount, int start, int end) {
+    if (signalCount < 2) return true;  // 信号が1個以下の場合は除外しない
+    if (!nodeCoords[start].hasCoordinates) return true;  // 座標がない場合は除外しない
     
-    if (shouldExclude) {
-        fprintf(stderr, "Filter3: Excluding path with %d signals: ratio=%.2f > threshold=%.2f (shortest=%.2fm, signalPath=%.2fm)\n",
-                signalCount, ratio, DETOUR_THRESHOLD, shortestDistance, signalPathDistance);
+    // 各信号のスタートからの距離を計算
+    typedef struct {
+        int signalIdx;
+        double distanceFromStart;
+    } SignalDistance;
+    
+    SignalDistance signalDistances[MAX_SIGNALS];
+    int validSignals = 0;
+    
+    for (int i = 0; i < signalCount; i++) {
+        EdgeData *edge = &edgeDataArray[signalEdgeIndices[i]];
+        int signalFrom = edge->from;
+        int signalTo = edge->to;
+        
+        // 信号の中点座標を計算
+        double signalLat, signalLon;
+        if (nodeCoords[signalFrom].hasCoordinates && nodeCoords[signalTo].hasCoordinates) {
+            signalLat = (nodeCoords[signalFrom].latitude + nodeCoords[signalTo].latitude) / 2.0;
+            signalLon = (nodeCoords[signalFrom].longitude + nodeCoords[signalTo].longitude) / 2.0;
+            
+            // スタートからの距離を計算
+            double distance = calculateDistance(
+                nodeCoords[start].latitude, nodeCoords[start].longitude,
+                signalLat, signalLon
+            );
+            
+            signalDistances[validSignals].signalIdx = signalEdgeIndices[i];
+            signalDistances[validSignals].distanceFromStart = distance;
+            validSignals++;
+        }
     }
     
-    return !shouldExclude;  // trueなら含める、falseなら除外
+    if (validSignals < 2) return true;  // 有効な信号が2個未満の場合は除外しない
+    
+    // 距離でソート（バブルソート）
+    for (int i = 0; i < validSignals - 1; i++) {
+        for (int j = 0; j < validSignals - 1 - i; j++) {
+            if (signalDistances[j].distanceFromStart > signalDistances[j + 1].distanceFromStart) {
+                SignalDistance temp = signalDistances[j];
+                signalDistances[j] = signalDistances[j + 1];
+                signalDistances[j + 1] = temp;
+            }
+        }
+    }
+    
+    // 理想的な順序（距離の小さい順）を取得
+    int idealOrder[MAX_SIGNALS];
+    for (int i = 0; i < validSignals; i++) {
+        idealOrder[i] = signalDistances[i].signalIdx;
+    }
+    
+    // 現在の順序と理想的な順序を比較
+    // 後戻り（逆順）のペアの数をカウント
+    int reversePairs = 0;
+    for (int i = 0; i < signalCount; i++) {
+        int currentSignal = signalEdgeIndices[i];
+        int idealPos = -1;
+        
+        // 理想的な順序での位置を探す
+        for (int j = 0; j < validSignals; j++) {
+            if (idealOrder[j] == currentSignal) {
+                idealPos = j;
+                break;
+            }
+        }
+        
+        if (idealPos < 0) continue;  // 見つからない場合はスキップ
+        
+        // 後続の信号で、理想的な順序では前にあるものをカウント
+        for (int j = i + 1; j < signalCount; j++) {
+            int nextSignal = signalEdgeIndices[j];
+            int nextIdealPos = -1;
+            
+            for (int k = 0; k < validSignals; k++) {
+                if (idealOrder[k] == nextSignal) {
+                    nextIdealPos = k;
+                    break;
+                }
+            }
+            
+            if (nextIdealPos >= 0 && nextIdealPos < idealPos) {
+                reversePairs++;  // 後戻りを検出
+            }
+        }
+    }
+    
+    // 後戻りのペアが信号数の半分を超える場合は除外
+    // 例：信号3個の場合、後戻りが2個以上ある場合は除外
+    int maxReversePairs = validSignals / 2;
+    if (reversePairs > maxReversePairs) {
+        return false;  // 除外
+    }
+    
+    return true;  // 含める
 }
 
 // 信号情報を読み込む
@@ -1025,7 +1847,6 @@ void loadSignalData(const char *filename) {
     while (fgets(line, sizeof(line), file)) {
         if (line[0] == '\n' || line[0] == '\0') continue;
         
-        char edgeKey[64];
         int cycle, green;
         double phase;
         double expectedWaitTime = 0.0;  // CSVから読み込んだ期待値
@@ -1168,9 +1989,9 @@ void generateSignalPermutations(int *signalEdgeIndices, int signalCount,
         return;
     }
     
-    // 信号数が少ない場合は全ての順列を生成
-    // 信号数が多い場合は、最大24個の順列を生成（4! = 24）
-    int maxPerms = (signalCount <= 4) ? 24 : 24;
+    // 信号数が多い場合は順列生成を制限（処理時間短縮）
+    // 信号数が2-3個: 全順列、4個以上: 最大6個（処理時間短縮のため）
+    int maxPerms = (signalCount <= 3) ? 24 : 6;
     
     // 配列をコピーして順列を生成
     int arr[MAX_SIGNALS];
@@ -1207,6 +2028,41 @@ void generateSignalPermutations(int *signalEdgeIndices, int signalCount,
     }
 }
 
+// 信号エッジの方向がスタート→ゴールの方向かどうかを判定
+// ゴール→スタートの方向の信号エッジは除外する
+bool isSignalInStartToGoalDirection(int signalEdgeIdx, int start, int end) {
+    if (!nodeCoords[start].hasCoordinates || !nodeCoords[end].hasCoordinates) {
+        return true;  // 座標がない場合は除外しない
+    }
+    
+    EdgeData *edge = &edgeDataArray[signalEdgeIdx];
+    int signalFrom = edge->from;
+    int signalTo = edge->to;
+    
+    if (!nodeCoords[signalFrom].hasCoordinates || !nodeCoords[signalTo].hasCoordinates) {
+        return true;  // 座標がない場合は除外しない
+    }
+    
+    // スタート→ゴールの方向ベクトル
+    double startToGoalBearing = calculateBearing(
+        nodeCoords[start].latitude, nodeCoords[start].longitude,
+        nodeCoords[end].latitude, nodeCoords[end].longitude
+    );
+    
+    // 信号エッジの方向ベクトル（from→to）
+    double signalBearing = calculateBearing(
+        nodeCoords[signalFrom].latitude, nodeCoords[signalFrom].longitude,
+        nodeCoords[signalTo].latitude, nodeCoords[signalTo].longitude
+    );
+    
+    // 角度差を計算（0-180度）
+    double angleDiff = angleDifference(startToGoalBearing, signalBearing);
+    
+    // 角度差が90度以下の場合、スタート→ゴールの方向と一致しているとみなす
+    // 角度差が90度を超える場合、ゴール→スタートの方向なので除外
+    return angleDiff <= 90.0;
+}
+
 // 信号の順序に従って経路を生成（スタート→信号1→信号2→...→信号N→ゴール）
 // 各セグメントは信号待ち時間を考慮せずにダイクストラ法で最短経路を算出
 DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdgeIndices, int signalCount) {
@@ -1222,6 +2078,7 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
     
     // 信号の順序は最適化せず、元の順序のまま使用（バリエーションを増やすため）
     int currentNode = start;
+    double currentArrivalTime = 0.0;  // 現在の到着時刻を追跡（秒）
     
     // 各信号を順番に通る
     for (int i = 0; i < signalCount; i++) {
@@ -1229,6 +2086,16 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
         EdgeData *signalEdge = &edgeDataArray[signalEdgeIdx];
         int signalFrom = signalEdge->from;
         int signalTo = signalEdge->to;
+        
+        // 信号エッジの方向をチェック：ゴール→スタートの方向の信号は除外
+        if (!isSignalInStartToGoalDirection(signalEdgeIdx, start, end)) {
+            // ゴール→スタートの方向の信号なので、この経路を除外
+            fprintf(stderr, "Path excluded: signal edge %d (%d-%d) is in goal-to-start direction\n",
+                    signalEdgeIdx, signalFrom, signalTo);
+            result.cost = INF;
+            result.pathLength = 0;
+            return result;
+        }
         
         // 現在のノードから信号のfromノードまでの最短経路（信号待ち時間なし）
         DijkstraResult segment = dijkstraWithoutSignalWait(currentNode, signalFrom, NULL);
@@ -1254,6 +2121,10 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
                 result.path[result.pathLength++] = segment.path[j];
             }
         }
+        
+        // セグメントの移動時間を加算（到着時刻を更新）
+        currentArrivalTime += segment.cost;
+        result.cost += segment.cost;
         
         // 信号エッジがグラフに接続されているか確認
         bool signalEdgeExists = false;
@@ -1286,11 +2157,22 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
                 result.path[result.pathLength++] = signalEdgeGraphIdx;
             }
             
+            // 信号への到着時刻を計算（信号エッジのfromノードに到着した時刻）
+            double arrivalTimeAtSignal = currentArrivalTime;
+            
+            // 信号待ち時間を厳密に計算（CSVのphase、cycle、greenを使用）
+            double signalWaitTime = calculateSignalWaitTime(signalEdgeGraphIdx, arrivalTimeAtSignal, true);  // ログ出力
+            
             // 信号エッジの通過時間を加算
             double signalEdgeTime = getEdgeTimeSeconds(signalFrom, signalTo);
             if (signalEdgeTime < INF) {
                 result.cost += signalEdgeTime;
+                currentArrivalTime += signalEdgeTime;
             }
+            
+            // 信号待ち時間を加算
+            result.cost += signalWaitTime;
+            currentArrivalTime += signalWaitTime;
         } else {
             // 信号エッジがグラフに存在しない場合、警告を出力
             fprintf(stderr, "Warning: Signal edge %d (%d-%d) not found in graph, skipping\n", 
@@ -1298,9 +2180,11 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
             // 信号エッジを通らないが、経路は続行
         }
         
-        result.cost += segment.cost;
         currentNode = reverseDirection ? signalFrom : signalTo;
     }
+    
+    // 到着時刻を更新
+    result.arrivalTime = currentArrivalTime;
     
     // 最後の信号からゴールまでの最短経路（信号待ち時間なし）
     DijkstraResult finalSegment = dijkstraWithoutSignalWait(currentNode, end, NULL);
@@ -1317,14 +2201,18 @@ DijkstraResult findPathThroughSignalsInOrder(int start, int end, int *signalEdge
         }
     }
     
+    // 最終セグメントの移動時間を加算（到着時刻を更新）
     result.cost += finalSegment.cost;
+    currentArrivalTime += finalSegment.cost;
+    result.arrivalTime = currentArrivalTime;
     
     return result;
 }
 
-// 信号の組み合わせに基づいて経路を生成（フィルター適用版）
+// 信号の組み合わせに基づいて経路を生成（2段階Yen'sアルゴリズム使用）
 YenResult generateRoutesBySignalCombinations(int start, int end) {
     YenResult result;
+    result.paths = globalPaths;  // グローバル配列を使用
     result.pathCount = 0;
     
     // グローバル変数に設定（フィルター用）
@@ -1347,247 +2235,10 @@ YenResult generateRoutesBySignalCombinations(int start, int end) {
         return result;
     }
     
-    // フィルター適用前の信号数を記録
-    int originalSignalCount = signalCount;
-    fprintf(stderr, "=== フィルター適用前: %d個の信号 ===\n", originalSignalCount);
-    
-    // フィルター1と2を適用して信号を事前にフィルタリング
-    int filteredSignalEdges[MAX_SIGNALS];
-    int filteredSignalCount = 0;
-    int filter1Excluded = 0;
-    int filter2Excluded = 0;
-    
-    // スタートから各信号までの到着時刻を推定（簡易版：最短経路で計算）
-    for (int i = 0; i < signalCount; i++) {
-        int signalEdgeIdx = signalEdges[i];
-        EdgeData *signalEdge = &edgeDataArray[signalEdgeIdx];
-        
-        // フィルター2: 方向フィルター（到着時刻が不要）
-        if (!filterByDirection(signalEdgeIdx)) {
-            filter2Excluded++;
-            continue;
-        }
-        
-        // フィルター1: 最悪待ち時間フィルター（到着時刻が必要）
-        // スタートから信号までの最短経路を計算して到着時刻を推定
-        DijkstraResult toSignal = dijkstraWithoutSignalWait(start, signalEdge->from, NULL);
-        double arrivalTime = 0.0;
-        if (toSignal.cost < INF) {
-            arrivalTime = toSignal.cost;  // 秒単位
-        } else {
-            // 双方向を試す
-            toSignal = dijkstraWithoutSignalWait(start, signalEdge->to, NULL);
-            if (toSignal.cost < INF) {
-                arrivalTime = toSignal.cost;
-            }
-        }
-        
-        if (!filterByWorstWaitTime(signalEdgeIdx, arrivalTime)) {
-            filter1Excluded++;
-            continue;
-        }
-        
-        // 両方のフィルターを通過した信号を追加
-        filteredSignalEdges[filteredSignalCount++] = signalEdgeIdx;
-    }
-    
-    fprintf(stderr, "=== フィルター適用結果 ===\n");
-    fprintf(stderr, "フィルター1（最悪待ち時間）で除外: %d個\n", filter1Excluded);
-    fprintf(stderr, "フィルター2（方向）で除外: %d個\n", filter2Excluded);
-    fprintf(stderr, "フィルター適用後: %d個の信号（%d個除外）\n", 
-            filteredSignalCount, originalSignalCount - filteredSignalCount);
-    
-    if (filteredSignalCount == 0) {
-        // 全ての信号がフィルターで除外された場合は、信号を通らない最短経路を返す
-        fprintf(stderr, "全ての信号がフィルターで除外されました。信号を通らない最短経路を返します。\n");
-        DijkstraResult basePath = dijkstraWithoutSignalWait(start, end, NULL);
-        if (basePath.cost < INF && basePath.pathLength > 0) {
-            RouteMetrics baseMetrics = calculateRouteMetrics(basePath.path, basePath.pathLength);
-            Path *p = &result.paths[result.pathCount++];
-            memcpy(p->edges, basePath.path, basePath.pathLength * sizeof(int));
-            p->edgeCount = basePath.pathLength;
-            p->totalDistance = baseMetrics.totalDistance;
-            p->totalTime = baseMetrics.totalTimeWithExpected;
-            p->totalWaitTime = 0.0;
-            p->totalTimeWithExpected = baseMetrics.totalTimeWithExpected;
-        }
-        return result;
-    }
-    
-    // フィルター後の信号を使用
-    int activeSignalCount = filteredSignalCount;
-    int *activeSignalEdges = filteredSignalEdges;
-    
-    // 信号の組み合わせを生成（2^activeSignalCount - 1通り）
-    int maxCombinations = (1 << activeSignalCount) - 1;
-    
-    // 経路の重複チェック用
-    bool seenPaths[MAX_COMBINATIONS][MAX_PATH_LENGTH];
-    int seenPathLengths[MAX_COMBINATIONS];
-    int seenPathCount = 0;
-    
-    int filter3Excluded = 0;
-    int totalCombinations = 0;
-    
-    // 全ての組み合わせを試行
-    for (int combination = 1; combination <= maxCombinations && result.pathCount < MAX_COMBINATIONS; combination++) {
-        totalCombinations++;
-        
-        // この組み合わせに含まれる信号エッジのリストを取得
-        int requiredSignals[MAX_SIGNALS];
-        int requiredSignalCount = 0;
-        for (int i = 0; i < activeSignalCount; i++) {
-            if (combination & (1 << i)) {
-                requiredSignals[requiredSignalCount++] = activeSignalEdges[i];
-            }
-        }
-        
-        // フィルター3: 遠回り経路の除外
-        if (!filterByDetour(requiredSignals, requiredSignalCount, start, end)) {
-            filter3Excluded++;
-            if (filter3Excluded <= 10) {  // 最初の10個だけ詳細ログを出力
-                fprintf(stderr, "Filter3: Excluding combination %d with %d signals\n", 
-                        combination, requiredSignalCount);
-            }
-            continue;
-        }
-        
-        // バリエーションを最大化するため、可能な限り多くの順序を試す
-        int permutations[24][MAX_SIGNALS];  // 最大24個の順列
-        int permCount = 0;
-        generateSignalPermutations(requiredSignals, requiredSignalCount, permutations, &permCount);
-        
-        // 各順列について経路を探索（最低1つは見つけるまで試す）
-        bool foundPath = false;
-        for (int permIdx = 0; permIdx < permCount && result.pathCount < MAX_COMBINATIONS; permIdx++) {
-            int orderedSignals[MAX_SIGNALS];
-            for (int i = 0; i < requiredSignalCount; i++) {
-                orderedSignals[i] = permutations[permIdx][i];
-            }
-            
-            // この順序で信号を通る経路を探索
-            DijkstraResult path = findPathThroughSignalsInOrder(start, end, orderedSignals, requiredSignalCount);
-            
-            if (path.cost < INF && path.pathLength > 0) {
-                // 経路に含まれる信号エッジを確認
-                bool signalsInPath[MAX_SIGNALS] = {false};
-                int signalsFoundCount = 0;
-                
-                for (int k = 0; k < path.pathLength; k++) {
-                    for (int s = 0; s < requiredSignalCount; s++) {
-                        // エッジインデックスで直接比較
-                        if (path.path[k] == orderedSignals[s]) {
-                            if (!signalsInPath[s]) {
-                                signalsInPath[s] = true;
-                                signalsFoundCount++;
-                            }
-                        }
-                        // グラフのエッジインデックスと信号エッジインデックスが異なる可能性があるため、
-                        // エッジデータで比較
-                        EdgeData *pathEdge = &edgeDataArray[path.path[k]];
-                        EdgeData *requiredSignalEdge = &edgeDataArray[orderedSignals[s]];
-                        if ((pathEdge->from == requiredSignalEdge->from && pathEdge->to == requiredSignalEdge->to) ||
-                            (pathEdge->from == requiredSignalEdge->to && pathEdge->to == requiredSignalEdge->from)) {
-                            if (!signalsInPath[s]) {
-                                signalsInPath[s] = true;
-                                signalsFoundCount++;
-                            }
-                        }
-                    }
-                }
-                
-                // 全ての必要な信号が経路に含まれているか確認
-                if (signalsFoundCount == requiredSignalCount) {
-                    foundPath = true;
-                } else {
-                    // 一部の信号が経路に含まれていない場合、警告を出力して経路を破棄
-                    fprintf(stderr, "Warning: Only %d/%d signals found in path for combination %d\n", 
-                            signalsFoundCount, requiredSignalCount, combination);
-                    for (int s = 0; s < requiredSignalCount; s++) {
-                        if (!signalsInPath[s]) {
-                            EdgeData *signalEdge = &edgeDataArray[orderedSignals[s]];
-                            fprintf(stderr, "  Missing signal edge %d (%d-%d)\n", 
-                                    orderedSignals[s], signalEdge->from, signalEdge->to);
-                        }
-                    }
-                    // 全ての信号が含まれていない場合は経路を破棄
-                    continue;
-                }
-                
-                // 重複チェック
-                bool isDuplicate = false;
-                for (int p = 0; p < seenPathCount; p++) {
-                    if (seenPathLengths[p] == path.pathLength) {
-                        bool same = true;
-                        for (int j = 0; j < path.pathLength; j++) {
-                            if (seenPaths[p][j] != path.path[j]) {
-                                same = false;
-                                break;
-                            }
-                        }
-                        if (same) {
-                            isDuplicate = true;
-                            break;
-                        }
-                    }
-                }
-                
-                if (!isDuplicate) {
-                    // 経路メトリクスを計算（信号待ち時間は期待値として追加）
-                    RouteMetrics metrics = calculateRouteMetrics(path.path, path.pathLength);
-                    
-                    // 経路内の各信号ごとに個別の期待値を計算して合計
-                    double totalSignalWaitTime = 0.0;
-                    for (int k = 0; k < path.pathLength; k++) {
-                        EdgeData *edge = &edgeDataArray[path.path[k]];
-                        if (edge->isSignal) {
-                            // 各信号ごとに個別の期待値を計算（秒）
-                            double signalExpected = calculateSignalWaitTimeExpected(path.path[k]);
-                            totalSignalWaitTime += signalExpected;
-                        }
-                    }
-                    totalSignalWaitTime /= 60.0;  // 分に変換
-                    
-                    Path *p = &result.paths[result.pathCount];
-                    memcpy(p->edges, path.path, path.pathLength * sizeof(int));
-                    p->edgeCount = path.pathLength;
-                    p->totalDistance = metrics.totalDistance;
-                    p->totalWaitTime = totalSignalWaitTime;
-                    p->totalTime = metrics.totalTime;  // 移動時間のみ（信号待ち時間なし）
-                    p->totalTimeWithExpected = metrics.totalTime + totalSignalWaitTime;  // 移動時間 + 信号待ち時間
-                    
-                    // 重複チェック用に保存
-                    memcpy(seenPaths[seenPathCount], path.path, path.pathLength * sizeof(int));
-                    seenPathLengths[seenPathCount] = path.pathLength;
-                    seenPathCount++;
-                    
-                    result.pathCount++;
-                }
-            }
-        }
-        
-        // 経路が見つからない場合は警告を出力（デバッグ用）
-        if (!foundPath && requiredSignalCount > 0) {
-            fprintf(stderr, "Warning: No path found for combination %d with %d signals\n", combination, requiredSignalCount);
-        }
-    }
-    
-    fprintf(stderr, "=== 最終結果 ===\n");
-    fprintf(stderr, "試行した組み合わせ数: %d\n", totalCombinations);
-    fprintf(stderr, "フィルター3（遠回り）で除外: %d個の組み合わせ\n", filter3Excluded);
-    fprintf(stderr, "生成された経路数: %d\n", result.pathCount);
-    
-    // 全ての経路を総推定時間でソート（最短のものを最初に）
-    for (int i = 0; i < result.pathCount - 1; i++) {
-        for (int j = i + 1; j < result.pathCount; j++) {
-            if (result.paths[i].totalTimeWithExpected > result.paths[j].totalTimeWithExpected) {
-                // 経路を交換
-                Path temp = result.paths[i];
-                result.paths[i] = result.paths[j];
-                result.paths[j] = temp;
-            }
-        }
-    }
+    // 2段階Yen'sアルゴリズムを使用
+    // K = 100（上位100本の経路を探索）
+    int K = 100;
+    result = yensAlgorithmTwoStage(start, end, K);
     
     return result;
 }
@@ -1597,6 +2248,14 @@ void printJSONResult(YenResult *result) {
     printf("[\n");
     for (int i = 0; i < result->pathCount; i++) {
         Path *p = &result->paths[i];
+        
+        // デバッグ: 経路の最初のエッジを確認
+        if (p->edgeCount > 0) {
+            EdgeData *firstEdge = &edgeDataArray[p->edges[0]];
+            fprintf(stderr, "Route %d: First edge from=%d to=%d (startNode=%d, endNode=%d)\n", 
+                    i+1, firstEdge->from, firstEdge->to, startNode, endNode);
+        }
+        
         printf("  {\n");
         printf("    \"userPref\": \"");
         for (int j = 0; j < p->edgeCount; j++) {
@@ -1623,14 +2282,17 @@ int main(int argc, char *argv[]) {
         return 1;
     }
     
-    int startNode = atoi(argv[1]);
-    int endNode = atoi(argv[2]);
+    // グローバル変数に直接設定（フィルター関数で使用されるため）
+    startNode = atoi(argv[1]);
+    endNode = atoi(argv[2]);
     walkingSpeed = atof(argv[3]);
     
     if (startNode < 1 || startNode >= MAX_NODES || endNode < 1 || endNode >= MAX_NODES) {
         fprintf(stderr, "Error: Invalid node numbers\n");
         return 1;
     }
+    
+    fprintf(stderr, "Start node: %d, End node: %d\n", startNode, endNode);
     
     // グラフを初期化
     initGraph();
