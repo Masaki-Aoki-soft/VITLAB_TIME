@@ -74,22 +74,52 @@ const calc = new Hono().post('/calc', async (c) => {
             console.log(`[C言語計算完了] ${(yenTime / 1000).toFixed(2)}秒`);
 
             // JSONをパース
-            const top5Routes = JSON.parse(cProgramOutput);
+            const rawRoutes = JSON.parse(cProgramOutput);
 
-            if (!Array.isArray(top5Routes) || top5Routes.length === 0) {
+            if (!Array.isArray(rawRoutes) || rawRoutes.length === 0) {
                 return c.json([]);
             }
+
+            // Cプログラムの出力をアプリ用の型に正規化
+            // - C側の totalTime は秒なので、分に変換して扱う
+            // - totalWaitTime は C 側では未定義なので 0 をデフォルトにする
+            const top5Routes = rawRoutes.map((route: any) => {
+                const totalDistance = Number(route.totalDistance ?? 0);
+                const totalTimeSeconds = Number(route.totalTime ?? 0);
+                const totalWaitTime = Number(route.totalWaitTime ?? 0);
+
+                return {
+                    ...route,
+                    totalDistance,
+                    // アプリ全体では「分」を使うのでここで秒→分に変換
+                    totalTime: totalTimeSeconds / 60,
+                    totalWaitTime,
+                };
+            });
 
             const totalTime = Date.now() - startTime;
             console.log(`[最終結果] C言語計算: ${top5Routes.length}件の経路を発見`);
             console.log(`[最終結果] 上位${top5Routes.length}件の経路を選択`);
             top5Routes.forEach((route: any, index: number) => {
+                const totalTimeMinutes =
+                    typeof route.totalTime === 'number' && isFinite(route.totalTime)
+                        ? route.totalTime
+                        : 0;
+                const totalDistance =
+                    typeof route.totalDistance === 'number' && isFinite(route.totalDistance)
+                        ? route.totalDistance
+                        : 0;
+                const totalWaitTimeMinutes =
+                    typeof route.totalWaitTime === 'number' && isFinite(route.totalWaitTime)
+                        ? route.totalWaitTime
+                        : 0;
+
                 console.log(
-                    `[経路${index + 1}] 総推定時間: ${route.totalTime.toFixed(
+                    `[経路${index + 1}] 総推定時間: ${totalTimeMinutes.toFixed(
                         2
-                    )}分, 距離: ${route.totalDistance.toFixed(
+                    )}分, 距離: ${totalDistance.toFixed(
                         2
-                    )}m, 待ち時間: ${route.totalWaitTime.toFixed(2)}分`
+                    )}m, 待ち時間: ${totalWaitTimeMinutes.toFixed(2)}分`
                 );
             });
             console.log(
