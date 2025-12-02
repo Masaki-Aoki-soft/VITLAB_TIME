@@ -136,6 +136,11 @@ double calculateBearing(double lat1, double lon1, double lat2, double lon2);
 bool isWithinAngleRange(double angle1, double angle2, double tolerance);
 bool appendSegment(RouteResult *res, const DijkstraResult *seg);
 void getTargetSignalEdges(int *targetSignalIndices, int *targetCount);
+void calcRouteMetricsWithWaitTimeAndBaseTime1(const int *edgeIdxs, int edgeCount,
+                                               double *outDist, double *outTimeSec, bool useExpectedWaitTime, bool isBaseTime1);
+double calculateWaitTimeWithReference(int edgeIdx, double cumulativeTime, double referencePhase);
+void calcRouteMetricsWithCycleBasedWaitTime(const int *edgeIdxs, int edgeCount,
+                                             double *outDist, double *outTimeSec, double *outWaitTimeSec, bool isBaseTime1);
 
 // 基準時刻1を計算する関数（信号を避けた最短経路、方角±60度制約あり）
 bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteResult *outRoute);
@@ -554,8 +559,123 @@ DijkstraResult dijkstra(int start, int goal) {
 // 待ち時間を含めたメトリクス計算（待ち時間を0にする場合と期待値を使う場合）
 void calcRouteMetricsWithWaitTime(const int *edgeIdxs, int edgeCount,
                                    double *outDist, double *outTimeSec, bool useExpectedWaitTime) {
+    calcRouteMetricsWithWaitTimeAndBaseTime1(edgeIdxs, edgeCount, outDist, outTimeSec, useExpectedWaitTime, false);
+}
+
+// 信号待ち時間を計算（基準位相を考慮）
+double calculateWaitTimeWithReference(int edgeIdx, double cumulativeTime, double referencePhase) {
+    EdgeData *edge = &edgeDataArray[edgeIdx];
+    if (!edge->isSignal || edge->signalCycle <= 0) return 0.0;
+    
+    double phaseDiff = fabs(edge->signalPhase - referencePhase);
+    double arrivalTime = cumulativeTime;
+    double timeIntoCycle = fmod(
+        arrivalTime - phaseDiff + edge->signalCycle,
+        edge->signalCycle
+    );
+    
+    if (timeIntoCycle > edge->signalGreen) {
+        return edge->signalCycle - timeIntoCycle;
+    }
+    return 0.0;
+}
+
+// サイクルベースの待ち時間を含めたメトリクス計算
+// isBaseTime1=true: 基準時刻1（緑）- 信号の待ち時間は追加しない、60-209横断歩道の待ち時間は追加する
+// isBaseTime1=false: 基準時刻2（青）や赤 - 信号の待ち時間と60-209横断歩道の待ち時間の両方を追加する
+void calcRouteMetricsWithCycleBasedWaitTime(const int *edgeIdxs, int edgeCount,
+                                             double *outDist, double *outTimeSec, double *outWaitTimeSec, bool isBaseTime1) {
     double totalDist = 0.0;
     double totalTime = 0.0;
+    double totalWaitTime = 0.0;
+    double cumulativeTime = 0.0;
+    double signalWaitTime = 0.0;  // 信号の待ち時間のみ
+    double crosswalkWaitTime = 0.0;  // 60-209横断歩道の待ち時間のみ
+    
+    // 最初の信号エッジの位相を基準位相として取得
+    double referencePhase = 0.0;
+    bool hasReferencePhase = false;
+    for (int i = 0; i < edgeCount; i++) {
+        int idx = edgeIdxs[i];
+        if (idx >= 0 && idx < edgeDataCount) {
+            EdgeData *e = &edgeDataArray[idx];
+            if (e->isSignal && e->signalCycle > 0) {
+                referencePhase = e->signalPhase;
+                hasReferencePhase = true;
+                break;
+            }
+        }
+    }
+    
+    // 60-209のエッジインデックスを取得（正規化済み）
+    int crosswalk60_209Idx = -1;
+    int nf, nt;
+    normalizeEdgeKey(60, 209, &nf, &nt);
+    crosswalk60_209Idx = findEdgeIndex(nf, nt);
+    
+    for (int i = 0; i < edgeCount; i++) {
+        int idx = edgeIdxs[i];
+        if (idx < 0 || idx >= edgeDataCount) continue;
+        EdgeData *e = &edgeDataArray[idx];
+        totalDist += e->distance;
+        
+        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
+        if (adjustedSpeed <= 0.0) continue;
+        double timeMinutes = e->distance / adjustedSpeed;
+        double travelTimeSeconds = timeMinutes * 60.0;  // 秒
+        totalTime += travelTimeSeconds;
+        cumulativeTime += travelTimeSeconds;
+        
+        // 信号エッジの場合、サイクルベースの待ち時間を計算
+        // 基準時刻1（isBaseTime1=true）の場合は信号の待ち時間を追加しない
+        if (e->isSignal && !isBaseTime1 && hasReferencePhase) {
+            double waitTime = calculateWaitTimeWithReference(idx, cumulativeTime, referencePhase);
+            signalWaitTime += waitTime;
+            totalWaitTime += waitTime;
+            totalTime += waitTime;
+            cumulativeTime += waitTime;
+        }
+        
+        // 60-209の横断歩道の場合（信号ではないが期待値が載っている）
+        // すべての経路（緑・青・赤）で待ち時間を追加する
+        if (idx == crosswalk60_209Idx) {
+            // signalExpectedが0.0の場合は、固定値20秒を使用
+            double crosswalkWait = 0.0;
+            if (e->signalExpected > 0.0) {
+                crosswalkWait = e->signalExpected * 60.0;  // 秒に変換
+            } else {
+                // signal_inf.csvにデータが無い場合のフォールバック: 20秒
+                crosswalkWait = 20.0;  // 秒
+                fprintf(stderr, "  警告: 60-209横断歩道のsignalExpectedが0.0のため、固定値20秒を使用します\n");
+            }
+            crosswalkWaitTime += crosswalkWait;
+            totalWaitTime += crosswalkWait;
+            totalTime += crosswalkWait;
+            cumulativeTime += crosswalkWait;
+            fprintf(stderr, "  60-209横断歩道: 待ち時間%.2f秒を追加 (isBaseTime1=%s, 累計信号待ち=%.2f秒, 累計横断歩道待ち=%.2f秒)\n", 
+                    crosswalkWait, isBaseTime1 ? "true" : "false", signalWaitTime, crosswalkWaitTime);
+        }
+    }
+    
+    fprintf(stderr, "  calcRouteMetricsWithCycleBasedWaitTime: 信号待ち=%.2f秒, 横断歩道待ち=%.2f秒, 合計待ち=%.2f秒 (isBaseTime1=%s)\n",
+            signalWaitTime, crosswalkWaitTime, totalWaitTime, isBaseTime1 ? "true" : "false");
+    
+    *outDist = totalDist;
+    *outTimeSec = totalTime;
+    *outWaitTimeSec = totalWaitTime;
+}
+
+// 待ち時間を含めたメトリクス計算（基準時刻1の場合は60-209の待ち時間を追加しない）
+void calcRouteMetricsWithWaitTimeAndBaseTime1(const int *edgeIdxs, int edgeCount,
+                                               double *outDist, double *outTimeSec, bool useExpectedWaitTime, bool isBaseTime1) {
+    double totalDist = 0.0;
+    double totalTime = 0.0;
+
+    // 60-209のエッジインデックスを取得（正規化済み）
+    int crosswalk60_209Idx = -1;
+    int nf, nt;
+    normalizeEdgeKey(60, 209, &nf, &nt);
+    crosswalk60_209Idx = findEdgeIndex(nf, nt);
 
     for (int i = 0; i < edgeCount; i++) {
         int idx = edgeIdxs[i];
@@ -569,11 +689,22 @@ void calcRouteMetricsWithWaitTime(const int *edgeIdxs, int edgeCount,
         totalTime += timeMinutes * 60.0;  // 秒
         
         // 信号エッジの場合、待ち時間を追加
+        // 基準時刻1（isBaseTime1=true）の場合は信号の待ち時間を追加しない
         if (e->isSignal) {
-            if (useExpectedWaitTime) {
+            if (useExpectedWaitTime && !isBaseTime1) {
                 totalTime += e->signalExpected * 60.0;  // 期待待ち時間を秒に変換
             }
-            // useExpectedWaitTimeがfalseの場合は待ち時間0（追加しない）
+            // useExpectedWaitTimeがfalse、またはisBaseTime1がtrueの場合は待ち時間0（追加しない）
+        }
+        
+        // 60-209の横断歩道の場合（信号ではないが期待値が載っている）
+        // すべての経路（緑・青・赤）で待ち時間を追加する（useExpectedWaitTimeがtrueの場合のみ）
+        if (idx == crosswalk60_209Idx && useExpectedWaitTime) {
+            if (e->signalExpected > 0.0) {
+                totalTime += e->signalExpected * 60.0;  // 期待待ち時間を秒に変換
+                fprintf(stderr, "  60-209横断歩道: 待ち時間%.2f秒を追加\n", 
+                        e->signalExpected * 60.0);
+            }
         }
     }
 
@@ -753,17 +884,29 @@ void loadSignalData(const char *filename) {
         }
 
         // 信号フラグと情報を保存
-        edgeDataArray[edgeIdx].isSignal = 1;
+        // 60-209は信号がない横断歩道なので、isSignalを1にしない
+        // ただし、期待待ち時間は保存する
+        int nf, nt;
+        normalizeEdgeKey(from, to, &nf, &nt);
+        bool isCrosswalk60_209 = (nf == 60 && nt == 209);
+        
+        if (!isCrosswalk60_209) {
+            edgeDataArray[edgeIdx].isSignal = 1;
+        }
         edgeDataArray[edgeIdx].signalCycle = cycle;
         edgeDataArray[edgeIdx].signalGreen = green;
         edgeDataArray[edgeIdx].signalPhase = phase;
         edgeDataArray[edgeIdx].signalExpected = expected;
 
-        if (signalCount < MAX_SIGNALS) {
+        if (!isCrosswalk60_209 && signalCount < MAX_SIGNALS) {
             signalEdges[signalCount++] = edgeIdx;
             fprintf(stderr,
                     "Signal %d: edge %d (%d-%d) cycle=%.0f green=%.0f phase=%.2f expected=%.2f\n",
                     signalCount, edgeIdx, from, to, cycle, green, phase, expected);
+        } else if (isCrosswalk60_209) {
+            fprintf(stderr,
+                    "Crosswalk (no signal) %d-%d: expected=%.2f\n",
+                    nf, nt, expected);
         }
     }
 
@@ -850,9 +993,39 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
         r.edgeCount = 0;
         r.hasSignal = 0;
         
-        if (appendSegment(&r, &avoidSignalPath)) {
-            calcRouteMetrics(r.edges, r.edgeCount,
-                             &r.totalDistance, &r.totalTimeSeconds);
+            if (appendSegment(&r, &avoidSignalPath)) {
+            // 基準時刻1（緑色の経路）では、サイクルベースの待ち時間計算を使用
+            // ただし、信号の待ち時間は追加しないが、60-209の横断歩道の待ち時間は追加する
+            double waitTime;
+            calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                             &r.totalDistance, &r.totalTimeSeconds, &waitTime, true);
+            
+            // 60-209横断歩道が経路に含まれているかを確認し、含まれていたら20秒を追加
+            int crosswalk60_209Idx = -1;
+            int nf, nt;
+            normalizeEdgeKey(60, 209, &nf, &nt);
+            crosswalk60_209Idx = findEdgeIndex(nf, nt);
+            bool hasCrosswalk60_209 = false;
+            if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
+                for (int i = 0; i < r.edgeCount; i++) {
+                    if (r.edges[i] == crosswalk60_209Idx) {
+                        hasCrosswalk60_209 = true;
+                        EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
+                        // signalExpectedが0.0の場合は、固定値20秒を使用
+                        double crosswalkWait = 0.0;
+                        if (e->signalExpected > 0.0) {
+                            crosswalkWait = e->signalExpected * 60.0;  // 秒
+                        } else {
+                            // signal_inf.csvにデータが無い場合のフォールバック: 20秒
+                            crosswalkWait = 20.0;  // 秒
+                            fprintf(stderr, "基準時刻1: 警告: 60-209横断歩道のsignalExpectedが0.0のため、固定値20秒を使用します\n");
+                        }
+                        r.totalTimeSeconds += crosswalkWait;
+                        fprintf(stderr, "基準時刻1: 60-209横断歩道が経路に含まれているため、待ち時間%.2f秒を追加\n", crosswalkWait);
+                        break;
+                    }
+                }
+            }
             
             // 信号が含まれていないか確認
             for (int i = 0; i < r.edgeCount; i++) {
@@ -915,8 +1088,38 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
             r.hasSignal = 0;
             
             if (appendSegment(&r, &fallbackPath)) {
-                calcRouteMetrics(r.edges, r.edgeCount,
-                                 &r.totalDistance, &r.totalTimeSeconds);
+                // 基準時刻1（緑色の経路）では、サイクルベースの待ち時間計算を使用
+                // ただし、信号の待ち時間は追加しないが、60-209の横断歩道の待ち時間は追加する
+                double waitTime;
+                calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                                 &r.totalDistance, &r.totalTimeSeconds, &waitTime, true);
+                
+                // 60-209横断歩道が経路に含まれているかを確認し、含まれていたら20秒を追加
+                int crosswalk60_209Idx = -1;
+                int nf, nt;
+                normalizeEdgeKey(60, 209, &nf, &nt);
+                crosswalk60_209Idx = findEdgeIndex(nf, nt);
+                bool hasCrosswalk60_209 = false;
+                if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
+                    for (int i = 0; i < r.edgeCount; i++) {
+                        if (r.edges[i] == crosswalk60_209Idx) {
+                            hasCrosswalk60_209 = true;
+                            EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
+                            // signalExpectedが0.0の場合は、固定値20秒を使用
+                            double crosswalkWait = 0.0;
+                            if (e->signalExpected > 0.0) {
+                                crosswalkWait = e->signalExpected * 60.0;  // 秒
+                            } else {
+                                // signal_inf.csvにデータが無い場合のフォールバック: 20秒
+                                crosswalkWait = 20.0;  // 秒
+                                fprintf(stderr, "基準時刻1（フォールバック）: 警告: 60-209横断歩道のsignalExpectedが0.0のため、固定値20秒を使用します\n");
+                            }
+                            r.totalTimeSeconds += crosswalkWait;
+                            fprintf(stderr, "基準時刻1（フォールバック）: 60-209横断歩道が経路に含まれているため、待ち時間%.2f秒を追加\n", crosswalkWait);
+                            break;
+                        }
+                    }
+                }
                 
                 // 信号が含まれていないか再確認
                 for (int i = 0; i < r.edgeCount; i++) {
@@ -971,9 +1174,38 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
                 if (r.edgeCount < MAX_PATH_LENGTH)
                     r.edges[r.edgeCount++] = edgeIdx;
                 if (appendSegment(&r, &seg2)) {
-                    // 待ち時間0で計算
-                    calcRouteMetricsWithWaitTime(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, false);
+                    // 基準時刻2（青色の経路）では、サイクルベースの待ち時間計算を使用
+                    // 信号の待ち時間は0にするが、60-209横断歩道の待ち時間は追加する
+                    double waitTime;
+                    double originalTotalTime;
+                    calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &originalTotalTime, &waitTime, false);
+                    
+                    // 基準時刻2では信号の待ち時間のみを除外する
+                    // waitTimeには信号の待ち時間と60-209の待ち時間の両方が含まれている
+                    // 60-209横断歩道の待ち時間を計算
+                    int crosswalk60_209Idx = -1;
+                    int nf, nt;
+                    normalizeEdgeKey(60, 209, &nf, &nt);
+                    crosswalk60_209Idx = findEdgeIndex(nf, nt);
+                    double crosswalkWaitTime = 0.0;
+                    if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
+                        for (int j = 0; j < r.edgeCount; j++) {
+                            if (r.edges[j] == crosswalk60_209Idx) {
+                                EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
+                                if (e->signalExpected > 0.0) {
+                                    crosswalkWaitTime = e->signalExpected * 60.0;  // 秒
+                                    fprintf(stderr, "  基準時刻2: 60-209横断歩道の待ち時間%.2f秒を保持（信号の待ち時間は除外）\n", crosswalkWaitTime);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // 信号の待ち時間のみを除外（60-209横断歩道の待ち時間は保持）
+                    double signalWaitTimeOnly = waitTime - crosswalkWaitTime;
+                    r.totalTimeSeconds = originalTotalTime - signalWaitTimeOnly;
+                    fprintf(stderr, "  基準時刻2: 総待ち時間=%.2f秒（信号=%.2f秒, 横断歩道=%.2f秒）→信号のみ除外して%.2f秒に調整\n",
+                            waitTime, signalWaitTimeOnly, crosswalkWaitTime, r.totalTimeSeconds);
                     if (r.totalTimeSeconds < minTime) {
                         minTime = r.totalTimeSeconds;
                         bestRoute = r;
@@ -997,9 +1229,38 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
                 if (r.edgeCount < MAX_PATH_LENGTH)
                     r.edges[r.edgeCount++] = edgeIdx;
                 if (appendSegment(&r, &seg2)) {
-                    // 待ち時間0で計算
-                    calcRouteMetricsWithWaitTime(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, false);
+                    // 基準時刻2（青色の経路）では、サイクルベースの待ち時間計算を使用
+                    // 信号の待ち時間は0にするが、60-209横断歩道の待ち時間は追加する
+                    double waitTime;
+                    double originalTotalTime;
+                    calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &originalTotalTime, &waitTime, false);
+                    
+                    // 基準時刻2では信号の待ち時間のみを除外する
+                    // waitTimeには信号の待ち時間と60-209の待ち時間の両方が含まれている
+                    // 60-209横断歩道の待ち時間を計算
+                    int crosswalk60_209Idx = -1;
+                    int nf, nt;
+                    normalizeEdgeKey(60, 209, &nf, &nt);
+                    crosswalk60_209Idx = findEdgeIndex(nf, nt);
+                    double crosswalkWaitTime = 0.0;
+                    if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
+                        for (int j = 0; j < r.edgeCount; j++) {
+                            if (r.edges[j] == crosswalk60_209Idx) {
+                                EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
+                                if (e->signalExpected > 0.0) {
+                                    crosswalkWaitTime = e->signalExpected * 60.0;  // 秒
+                                    fprintf(stderr, "  基準時刻2: 60-209横断歩道の待ち時間%.2f秒を保持（信号の待ち時間は除外）\n", crosswalkWaitTime);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    // 信号の待ち時間のみを除外（60-209横断歩道の待ち時間は保持）
+                    double signalWaitTimeOnly = waitTime - crosswalkWaitTime;
+                    r.totalTimeSeconds = originalTotalTime - signalWaitTimeOnly;
+                    fprintf(stderr, "  基準時刻2: 総待ち時間=%.2f秒（信号=%.2f秒, 横断歩道=%.2f秒）→信号のみ除外して%.2f秒に調整\n",
+                            waitTime, signalWaitTimeOnly, crosswalkWaitTime, r.totalTimeSeconds);
                     if (r.totalTimeSeconds < minTime) {
                         minTime = r.totalTimeSeconds;
                         bestRoute = r;
@@ -1072,8 +1333,8 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
                 if (r.edgeCount < MAX_PATH_LENGTH)
                     r.edges[r.edgeCount++] = edgeIdx;
                 if (appendSegment(&r, &seg2)) {
-                    calcRouteMetricsWithWaitTime(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, true);
+                    calcRouteMetricsWithWaitTimeAndBaseTime1(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &r.totalTimeSeconds, true, false);
                     *outRoute = r;
                     return true;
                 }
@@ -1094,8 +1355,8 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
                 if (r.edgeCount < MAX_PATH_LENGTH)
                     r.edges[r.edgeCount++] = edgeIdx;
                 if (appendSegment(&r, &seg2)) {
-                    calcRouteMetricsWithWaitTime(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, true);
+                    calcRouteMetricsWithWaitTimeAndBaseTime1(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &r.totalTimeSeconds, true, false);
                     *outRoute = r;
                     return true;
                 }
@@ -1159,8 +1420,8 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
             if (success) {
                 DijkstraResult seg2 = dijkstra(current, endNode);
                 if (seg2.cost < INF && appendSegment(&r, &seg2)) {
-                    calcRouteMetricsWithWaitTime(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, true);
+                    calcRouteMetricsWithWaitTimeAndBaseTime1(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &r.totalTimeSeconds, true, false);
                     *outRoute = r;
                     return true;
                 }
@@ -1298,19 +1559,42 @@ void printJSON(const RouteResult *routes, int routeCount) {
         printf("    \"totalDistance\": %.2f,\n", r->totalDistance);
         printf("    \"totalTime\": %.2f,\n", r->totalTimeSeconds / 60.0);
         
-        // 待ち時間を計算（信号エッジの期待待ち時間の合計）
+        // 待ち時間を計算
         double totalWaitTime = 0.0;
         if (r->routeType == 2) {
-            // 最短全網羅経路（赤）の場合、期待待ち時間を計算
-            for (int j = 0; j < r->edgeCount; j++) {
-                int idx = r->edges[j];
-                if (idx >= 0 && idx < edgeDataCount) {
-                    EdgeData *e = &edgeDataArray[idx];
-                    if (e->isSignal) {
-                        totalWaitTime += e->signalExpected;  // 分
+            // 最短全網羅経路（赤）の場合、サイクルベース計算で得られた待ち時間を使用
+            double dist, timeSec, waitTimeSec;
+            calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
+            totalWaitTime = waitTimeSec / 60.0;  // 秒を分に変換
+        } else if (r->routeType == 1) {
+            // 基準時刻1（緑）の場合：信号の待ち時間は含まれないが、60-209横断歩道の待ち時間は含まれる
+            double dist, timeSec, waitTimeSec;
+            calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, true);
+            totalWaitTime = waitTimeSec / 60.0;  // 秒を分に変換
+        } else if (r->routeType == 0) {
+            // 基準時刻2（青）の場合：信号の待ち時間は含まれないが、60-209横断歩道の待ち時間は含まれる
+            double dist, timeSec, waitTimeSec;
+            calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
+            // waitTimeSecには信号の待ち時間と60-209横断歩道の待ち時間の両方が含まれている
+            // 信号の待ち時間のみを除外
+            int crosswalk60_209Idx = -1;
+            int nf, nt;
+            normalizeEdgeKey(60, 209, &nf, &nt);
+            crosswalk60_209Idx = findEdgeIndex(nf, nt);
+            double crosswalkWaitTime = 0.0;
+            if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
+                for (int j = 0; j < r->edgeCount; j++) {
+                    if (r->edges[j] == crosswalk60_209Idx) {
+                        EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
+                        if (e->signalExpected > 0.0) {
+                            crosswalkWaitTime = e->signalExpected * 60.0;  // 秒
+                            break;
+                        }
                     }
                 }
             }
+            double signalWaitTimeOnly = waitTimeSec - crosswalkWaitTime;
+            totalWaitTime = crosswalkWaitTime / 60.0;  // 60-209横断歩道の待ち時間のみ（秒を分に変換）
         }
         printf("    \"totalWaitTime\": %.2f,\n", totalWaitTime);
         
@@ -1450,43 +1734,33 @@ int main(int argc, char *argv[]) {
             }
             
             // 重複していない経路で、総時間が最短のものを探す
-            // 注意: r->totalTimeSecondsは既にfindRouteThroughSignals内で
-            // calcRouteMetricsWithWaitTime(..., true)により移動時間+信号待ち時間が計算されている
+            // 網羅的経路の最終比較では、サイクルベースの厳密な待ち時間計算を使用
             if (!isBaseTime2) {
                 checkedCount++;
+                
+                // サイクルベースの厳密な待ち時間計算で再計算
+                double dist, timeSec, waitTimeSec;
+                calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
+                
                 // 最初の5件、最後の5件、最短経路候補が更新された時のみログ出力
-                if (i < 5 || i >= allEnumRouteCount - 5 || r->totalTimeSeconds < bestEnumRouteTime) {
-                    // 検証のため再計算
-                    double waitTimeSeconds = 0.0;
-                    double moveTimeSeconds = 0.0;
-                    for (int j = 0; j < r->edgeCount; j++) {
-                        int idx = r->edges[j];
-                        if (idx >= 0 && idx < edgeDataCount) {
-                            EdgeData *e = &edgeDataArray[idx];
-                            double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
-                            if (adjustedSpeed > 0.0) {
-                                moveTimeSeconds += (e->distance / adjustedSpeed) * 60.0;  // 秒
-                            }
-                            if (e->isSignal) {
-                                waitTimeSeconds += e->signalExpected * 60.0;  // 秒
-                            }
-                        }
-                    }
+                if (i < 5 || i >= allEnumRouteCount - 5 || timeSec < bestEnumRouteTime) {
                     if (i < 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
-                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
+                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
                     } else if (i >= allEnumRouteCount - 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
-                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
-                    } else if (r->totalTimeSeconds < bestEnumRouteTime) {
-                        fprintf(stderr, "  経路[%d]: 新たな最短候補! totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間) ✓\n",
-                                i, r->totalTimeSeconds);
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
+                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
+                    } else if (timeSec < bestEnumRouteTime) {
+                        fprintf(stderr, "  経路[%d]: 新たな最短候補! 合計=%.2f秒 (サイクルベース計算)\n", i, timeSec);
                     }
                 }
                 
-                if (r->totalTimeSeconds < bestEnumRouteTime) {
-                    bestEnumRouteTime = r->totalTimeSeconds;
+                if (timeSec < bestEnumRouteTime) {
+                    bestEnumRouteTime = timeSec;
                     bestEnumRouteIdx = i;
+                    // 厳密な計算結果を更新
+                    r->totalDistance = dist;
+                    r->totalTimeSeconds = timeSec;
                 }
             }
         }
@@ -1569,43 +1843,33 @@ int main(int argc, char *argv[]) {
             }
             
             // 重複していない経路で、総時間が最短のものを探す
-            // 注意: r->totalTimeSecondsは既にfindRouteThroughSignals内で
-            // calcRouteMetricsWithWaitTime(..., true)により移動時間+信号待ち時間が計算されている
+            // 網羅的経路の最終比較では、サイクルベースの厳密な待ち時間計算を使用
             if (!isBaseTime1 && !isBaseTime2) {
                 checkedCount++;
+                
+                // サイクルベースの厳密な待ち時間計算で再計算
+                double dist, timeSec, waitTimeSec;
+                calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
+                
                 // 最初の5件、最後の5件、最短経路候補が更新された時のみログ出力
-                if (i < 5 || i >= allEnumRouteCount - 5 || r->totalTimeSeconds < bestEnumRouteTime) {
-                    // 検証のため再計算
-                    double waitTimeSeconds = 0.0;
-                    double moveTimeSeconds = 0.0;
-                    for (int j = 0; j < r->edgeCount; j++) {
-                        int idx = r->edges[j];
-                        if (idx >= 0 && idx < edgeDataCount) {
-                            EdgeData *e = &edgeDataArray[idx];
-                            double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
-                            if (adjustedSpeed > 0.0) {
-                                moveTimeSeconds += (e->distance / adjustedSpeed) * 60.0;  // 秒
-                            }
-                            if (e->isSignal) {
-                                waitTimeSeconds += e->signalExpected * 60.0;  // 秒
-                            }
-                        }
-                    }
+                if (i < 5 || i >= allEnumRouteCount - 5 || timeSec < bestEnumRouteTime) {
                     if (i < 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
-                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
+                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
                     } else if (i >= allEnumRouteCount - 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
-                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
-                    } else if (r->totalTimeSeconds < bestEnumRouteTime) {
-                        fprintf(stderr, "  経路[%d]: 新たな最短候補! totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間) ✓\n",
-                                i, r->totalTimeSeconds);
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
+                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
+                    } else if (timeSec < bestEnumRouteTime) {
+                        fprintf(stderr, "  経路[%d]: 新たな最短候補! 合計=%.2f秒 (サイクルベース計算)\n", i, timeSec);
                     }
                 }
                 
-                if (r->totalTimeSeconds < bestEnumRouteTime) {
-                    bestEnumRouteTime = r->totalTimeSeconds;
+                if (timeSec < bestEnumRouteTime) {
+                    bestEnumRouteTime = timeSec;
                     bestEnumRouteIdx = i;
+                    // 厳密な計算結果を更新
+                    r->totalDistance = dist;
+                    r->totalTimeSeconds = timeSec;
                 }
             }
         }

@@ -7,9 +7,10 @@ interface RouteInfoProps {
     route1?: RouteInfoType | null;
     route2?: RouteInfoType | null;
     savedRoute?: RouteInfoType | null;
+    bestEnumRoute?: RouteInfoType | null;
 }
 
-export default function RouteInfo({ route1, route2, savedRoute }: RouteInfoProps) {
+export default function RouteInfo({ route1, route2, savedRoute, bestEnumRoute }: RouteInfoProps) {
     let content = '';
     let hasInfo = false;
 
@@ -18,21 +19,21 @@ export default function RouteInfo({ route1, route2, savedRoute }: RouteInfoProps
         const waitTimeSeconds1 = route1.totalWaitTime ? Math.round(route1.totalWaitTime * 60) : 0;
         content += `
       <div class="bg-green-500/20 border border-green-300/30 rounded-lg p-2">
-        <h4 class="text-green-200 font-semibold mb-2 flex items-center gap-2">
+        <h4 class="text-green-200 font-semibold mb-2 flex items-center gap-2 text-xs">
           <i class="fas fa-route"></i>経路1 (基準時刻1 - 緑)
         </h4>
-        <div class="grid grid-cols-3 gap-2 text-sm">
+        <div class="grid grid-cols-3 gap-1 text-xs">
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">総距離</div>
-            <div class="text-white font-semibold">${route1.totalDistance.toFixed(0)} m</div>
+            <div class="text-white font-semibold text-xs">${route1.totalDistance.toFixed(0)}m</div>
           </div>
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">所要時間</div>
-            <div class="text-white font-semibold">${formatTime(route1.totalTime)}</div>
+            <div class="text-white font-semibold text-xs">${formatTime(route1.totalTime)}</div>
           </div>
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">待ち時間</div>
-            <div class="text-white font-semibold">${waitTimeSeconds1}秒</div>
+            <div class="text-white font-semibold text-xs">${waitTimeSeconds1}秒</div>
           </div>
         </div>
       </div>
@@ -44,42 +45,69 @@ export default function RouteInfo({ route1, route2, savedRoute }: RouteInfoProps
         const waitTimeSeconds2 = route2.totalWaitTime ? Math.round(route2.totalWaitTime * 60) : 0;
         content += `
       <div class="bg-blue-500/20 border border-blue-300/30 rounded-lg p-2">
-        <h4 class="text-blue-200 font-semibold mb-2 flex items-center gap-2">
+        <h4 class="text-blue-200 font-semibold mb-2 flex items-center gap-2 text-xs">
           <i class="fas fa-route"></i>経路2 (基準時刻2 - 青)
         </h4>
-        <div class="grid grid-cols-3 gap-2 text-sm">
+        <div class="grid grid-cols-3 gap-1 text-xs">
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">総距離</div>
-            <div class="text-white font-semibold">${route2.totalDistance.toFixed(0)} m</div>
+            <div class="text-white font-semibold text-xs">${route2.totalDistance.toFixed(0)}m</div>
           </div>
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">所要時間</div>
-            <div class="text-white font-semibold">${formatTime(route2.totalTime)}</div>
+            <div class="text-white font-semibold text-xs">${formatTime(route2.totalTime)}</div>
           </div>
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">待ち時間</div>
-            <div class="text-white font-semibold">${waitTimeSeconds2}秒</div>
+            <div class="text-white font-semibold text-xs">${waitTimeSeconds2}秒</div>
           </div>
         </div>
       </div>
     `;
     }
 
-    if (savedRoute) {
+    if (bestEnumRoute) {
         hasInfo = true;
+        const waitTimeSeconds3 = bestEnumRoute.totalWaitTime ? Math.round(bestEnumRoute.totalWaitTime * 60) : 0;
+        // 最短全網羅経路（赤）
+        // 所要時間は移動時間 + 信号の待ち時間
         content += `
-      <div class="bg-green-500/20 border border-green-300/30 rounded-lg p-2">
-        <h4 class="text-green-200 font-semibold mb-2 flex items-center gap-2">
-          <i class="fas fa-route"></i>呼び出し経路 (緑)
+      <div class="bg-red-500/20 border border-red-300/30 rounded-lg p-2">
+        <h4 class="text-red-200 font-semibold mb-2 flex items-center gap-2 text-xs">
+          <i class="fas fa-route"></i>最短全網羅 (赤)
         </h4>
-        <div class="grid grid-cols-2 gap-2 text-sm">
+        <div class="grid grid-cols-3 gap-1 text-xs">
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">総距離</div>
-            <div class="text-white font-semibold">${savedRoute.totalDistance.toFixed(0)} m</div>
+            <div class="text-white font-semibold text-xs">${bestEnumRoute.totalDistance.toFixed(0)}m</div>
           </div>
           <div class="bg-white/10 rounded p-1 text-center">
             <div class="text-white/70 text-xs">所要時間</div>
-            <div class="text-white font-semibold">${formatTime(savedRoute.totalTime)}</div>
+            <div class="text-white font-semibold text-xs">${formatTime(bestEnumRoute.totalTime)}</div>
+          </div>
+          <div class="bg-white/10 rounded p-1 text-center">
+            <div class="text-white/70 text-xs">待ち時間</div>
+            <div class="text-white font-semibold text-xs">${waitTimeSeconds3}秒</div>
+          </div>
+        </div>
+      </div>
+    `;
+    } else if (savedRoute) {
+        hasInfo = true;
+        // 呼び出し経路（緑）
+        content += `
+      <div class="bg-green-500/20 border border-green-300/30 rounded-lg p-2">
+        <h4 class="text-green-200 font-semibold mb-2 flex items-center gap-2 text-xs">
+          <i class="fas fa-route"></i>呼び出し経路 (緑)
+        </h4>
+        <div class="grid grid-cols-2 gap-1 text-xs">
+          <div class="bg-white/10 rounded p-1 text-center">
+            <div class="text-white/70 text-xs">総距離</div>
+            <div class="text-white font-semibold text-xs">${savedRoute.totalDistance.toFixed(0)}m</div>
+          </div>
+          <div class="bg-white/10 rounded p-1 text-center">
+            <div class="text-white/70 text-xs">所要時間</div>
+            <div class="text-white font-semibold text-xs">${formatTime(savedRoute.totalTime)}</div>
           </div>
         </div>
       </div>

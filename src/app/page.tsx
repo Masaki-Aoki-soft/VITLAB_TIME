@@ -22,6 +22,7 @@ export default function Home() {
     const [route1, setRoute1] = useState<RouteInfoType | null>(null);
     const [route2, setRoute2] = useState<RouteInfoType | null>(null);
     const [savedRoute, setSavedRoute] = useState<RouteInfoType | null>(null);
+    const [bestEnumRoute, setBestEnumRoute] = useState<RouteInfoType | null>(null);
     const [routeData, setRouteData] = useState<CSVRow[]>([]);
     const [foundRoutes, setFoundRoutes] = useState<RouteResult[]>([]);
     const [currentRouteIndex, setCurrentRouteIndex] = useState(0);
@@ -152,6 +153,20 @@ export default function Home() {
 
     // 経路を検索
     const loadRouteFromCSV = async () => {
+        // 最初にマップ上の経路などを全てクリア
+        setRouteLayers([]);
+        setDataLayers([]);
+        setStartMarker(null);
+        otherLayersRef.current.forEach((layer) => {
+            if (mapRef.current) {
+                mapRef.current.removeLayer(layer);
+            }
+        });
+        otherLayersRef.current = [];
+        setRoute1(null);
+        setRoute2(null);
+        setSavedRoute(null);
+        
         setIsLoading(true);
         toast.promise(
             new Promise<string>(async (resolve, reject) => {
@@ -242,6 +257,18 @@ export default function Home() {
                 totalTime: baseTime2Route.totalTime,
                 totalWaitTime: baseTime2Route.totalWaitTime || 0,
             });
+        }
+        
+        // 最短全網羅経路（赤）をbestEnumRouteとして設定
+        if (bestEnumRoute) {
+            setBestEnumRoute({
+                totalDistance: bestEnumRoute.totalDistance,
+                totalTime: bestEnumRoute.totalTime,
+                totalWaitTime: bestEnumRoute.totalWaitTime || 0,
+            });
+        } else {
+            // bestEnumRouteがない場合は、クリア
+            setBestEnumRoute(null);
         }
 
         // 経路を描画（react-leaflet用にstateに追加）
@@ -553,6 +580,7 @@ export default function Home() {
         setRoute1(null);
         setRoute2(null);
         setSavedRoute(null);
+        setBestEnumRoute(null);
         setFoundRoutes([]);
         setCurrentRouteIndex(0);
     };
@@ -759,6 +787,7 @@ export default function Home() {
                                     route1={route1}
                                     route2={route2}
                                     savedRoute={savedRoute}
+                                    bestEnumRoute={bestEnumRoute}
                                 />
                             </div>
                         </div>
