@@ -123,12 +123,39 @@ double getEdgeTimeSeconds(int from, int to) {
     if (edgeIdx < 0) return INF;
 
     EdgeData *e = &edgeDataArray[edgeIdx];
+    
+    // 危険な経路に大きなペナルティを追加
+    int nf, nt;
+    normalizeEdgeKey(from, to, &nf, &nt);
+    bool isDangerousRoute = false;
+    int dangerousFrom = 0, dangerousTo = 0;
+    
+    // 危険な経路のチェック
+    if (nf == 22 && nt == 194) {
+        isDangerousRoute = true;
+        dangerousFrom = 22;
+        dangerousTo = 194;
+    } else if (nf == 18 && nt == 192) {
+        isDangerousRoute = true;
+        dangerousFrom = 18;
+        dangerousTo = 192;
+    }
+    
     // 勾配による速度補正（元コードと同じロジック）
     double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
     if (adjustedSpeed <= 0.0) return INF;
 
     double timeMinutes = e->distance / adjustedSpeed;  // 分
-    return timeMinutes * 60.0;                         // 秒
+    double timeSeconds = timeMinutes * 60.0;           // 秒
+    
+    // 危険な経路の場合は、時間に大きなペナルティを追加（10倍）
+    if (isDangerousRoute) {
+        timeSeconds *= 10.0;  // 10倍のペナルティ
+        fprintf(stderr, "警告: 危険な経路%d-%dを検出。時間にペナルティを追加: %.2f秒 → %.2f秒\n", 
+                dangerousFrom, dangerousTo, timeMinutes * 60.0, timeSeconds);
+    }
+    
+    return timeSeconds;
 }
 
 // 前方宣言
