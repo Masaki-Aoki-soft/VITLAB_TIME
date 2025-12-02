@@ -1378,14 +1378,8 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "基準時刻2の経路が見つかりませんでした。\n");
     }
     
-    // ========== 第三段階：全網羅（3個の信号全てを網羅的に通る経路、待ち時間期待値） ==========
-    fprintf(stderr, "\n=== 第三段階：全網羅（3個の信号全てを網羅的に通る経路、待ち時間期待値）を探索 ===\n");
-    RouteResult allEnumRoutes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を一時保存
-    int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, MAX_SIGNALS * 4 + 20);
-    fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
-    
     // ========== 表示条件に基づいて経路を分類 ==========
-    fprintf(stderr, "\n=== 表示条件に基づいて経路を分類 ===\n");
+    fprintf(stderr, "\n=== 基準時刻を比較して表示条件を決定 ===\n");
     
     // 基準時刻1と基準時刻2の時間を比較
     double baseTime1Seconds = hasBaseTime1Route ? baseTime1Route.totalTimeSeconds : INF;
@@ -1397,6 +1391,13 @@ int main(int argc, char *argv[]) {
     // 基準時刻1が見つからない場合の処理
     if (!hasBaseTime1Route) {
         fprintf(stderr, "基準時刻1が見つからないため、基準時刻2を緑で表示します。\n");
+        
+        // ========== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値） ==========
+        // 基準時刻1が見つからない場合も全網羅経路を計算
+        fprintf(stderr, "\n=== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値）を探索 ===\n");
+        RouteResult allEnumRoutes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を一時保存
+        int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, MAX_SIGNALS * 4 + 20);
+        fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
         
         // 基準時刻2を緑で追加
         if (hasBaseTime2Route) {
@@ -1428,36 +1429,22 @@ int main(int argc, char *argv[]) {
     }
     // 基準時刻1 < 基準時刻2 の場合
     else if (baseTime1Seconds < baseTime2Seconds) {
-        fprintf(stderr, "基準時刻1 < 基準時刻2: 基準時刻1を緑、全網羅を赤で表示\n");
+        fprintf(stderr, "基準時刻1 < 基準時刻2: 基準時刻1（緑）のみを表示（全網羅経路は計算しない）\n");
         
-        // 基準時刻1を緑で追加
+        // 基準時刻1を緑で追加（全網羅経路は計算・表示しない）
         baseTime1Route.routeType = 1;  // 緑
         routes[routeCount++] = baseTime1Route;
-        
-        // 全網羅経路を赤で追加（基準時刻1と重複するものは除外）
-        for (int i = 0; i < allEnumRouteCount; i++) {
-            RouteResult *r = &allEnumRoutes[i];
-            bool isBaseTime1 = false;
-            
-            if (r->edgeCount == baseTime1Route.edgeCount) {
-                bool same = true;
-                for (int j = 0; j < r->edgeCount; j++) {
-                    if (r->edges[j] != baseTime1Route.edges[j]) {
-                        same = false;
-                        break;
-                    }
-                }
-                if (same) isBaseTime1 = true;
-            }
-            
-            if (!isBaseTime1) {
-                r->routeType = 2;  // 赤
-                routes[routeCount++] = *r;
-            }
-        }
     }
     // 基準時刻1 >= 基準時刻2 の場合
     else {
+        // ========== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値） ==========
+        // 基準時刻1 >= 基準時刻2 の場合のみ全網羅経路を計算
+        fprintf(stderr, "\n=== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値）を探索 ===\n");
+        RouteResult allEnumRoutes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を一時保存
+        int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, MAX_SIGNALS * 4 + 20);
+        fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
+        
+        fprintf(stderr, "\n=== 表示条件に基づいて経路を分類 ===\n");
         fprintf(stderr, "基準時刻1 >= 基準時刻2: 基準時刻1を緑、基準時刻2を青、全網羅を赤で表示\n");
         
         // 基準時刻1を緑で追加
