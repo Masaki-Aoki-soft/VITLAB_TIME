@@ -17,9 +17,9 @@ export default function RouteInfo({ route1, route2, savedRoute }: RouteInfoProps
         hasInfo = true;
         const waitTimeSeconds1 = route1.totalWaitTime ? Math.round(route1.totalWaitTime * 60) : 0;
         content += `
-      <div class="bg-red-500/20 border border-red-300/30 rounded-lg p-2">
-        <h4 class="text-red-200 font-semibold mb-2 flex items-center gap-2">
-          <i class="fas fa-route"></i>経路1 (赤)
+      <div class="bg-blue-500/20 border border-blue-300/30 rounded-lg p-2">
+        <h4 class="text-blue-200 font-semibold mb-2 flex items-center gap-2">
+          <i class="fas fa-route"></i>経路1 (基準時刻1 - 青)
         </h4>
         <div class="grid grid-cols-3 gap-2 text-sm">
           <div class="bg-white/10 rounded p-1 text-center">
@@ -43,9 +43,9 @@ export default function RouteInfo({ route1, route2, savedRoute }: RouteInfoProps
         hasInfo = true;
         const waitTimeSeconds2 = route2.totalWaitTime ? Math.round(route2.totalWaitTime * 60) : 0;
         content += `
-      <div class="bg-blue-500/20 border border-blue-300/30 rounded-lg p-2">
-        <h4 class="text-blue-200 font-semibold mb-2 flex items-center gap-2">
-          <i class="fas fa-route"></i>経路2 (青)
+      <div class="bg-green-500/20 border border-green-300/30 rounded-lg p-2">
+        <h4 class="text-green-200 font-semibold mb-2 flex items-center gap-2">
+          <i class="fas fa-route"></i>経路2 (基準時刻2 - 緑)
         </h4>
         <div class="grid grid-cols-3 gap-2 text-sm">
           <div class="bg-white/10 rounded p-1 text-center">

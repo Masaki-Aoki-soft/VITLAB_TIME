@@ -15,6 +15,9 @@ export interface RouteResult {
     totalTime: number;
     totalWaitTime: number;
     userPref: string;
+    routeType?: number;  // 0: 基準時刻1（青）, 1: 基準時刻2（緑）
+    hasSignal?: number;  // 0: 信号なし, 1: 信号あり
+    signalEdgeIdx?: number;  // 信号エッジのインデックス
 }
 
 export interface CSVRow {

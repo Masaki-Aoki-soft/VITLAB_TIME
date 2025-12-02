@@ -15,8 +15,6 @@
 #define MAX_EDGES       1000
 #define MAX_PATH_LENGTH 200
 #define MAX_SIGNALS     50   // signal_inf.csv 側の最大信号数を想定
-#define MAX_SIGNAL_GROUPS 20  // 交差点グループの最大数
-#define MAX_EDGES_PER_GROUP 4  // 1つの交差点あたりの最大信号エッジ数
 
 #define INF DBL_MAX
 #define K_GRADIENT 0.5
@@ -49,20 +47,14 @@ typedef struct {
 } DijkstraResult;
 
 typedef struct {
-    int signalEdgeIdx;           // どの信号か
+    int signalEdgeIdx;           // どの信号か (-1の場合は信号なし)
     int edges[MAX_PATH_LENGTH];  // 経路のエッジ列
     int edgeCount;
     double totalDistance;        // m
     double totalTimeSeconds;     // 秒
+    int routeType;               // 0: 基準時刻1（青）, 1: 基準時刻2（緑）, 2: その他（赤）
+    int hasSignal;               // 経路に信号が含まれるか (1: 含む, 0: 含まない)
 } RouteResult;
-
-// 信号グループ（交差点ごと）
-typedef struct {
-    int edgeIndices[MAX_EDGES_PER_GROUP];  // この交差点に属する信号エッジのインデックス
-    int edgeCount;                          // エッジ数（通常4本）
-    int nodes[MAX_EDGES_PER_GROUP];        // この交差点に含まれるノード集合
-    int nodeCount;                          // ノード数
-} SignalGroup;
 
 /* ---------- グローバル ---------- */
 
@@ -72,9 +64,6 @@ int       edgeDataCount = 0;
 
 int   signalEdges[MAX_SIGNALS];
 int   signalCount = 0;
-
-SignalGroup signalGroups[MAX_SIGNAL_GROUPS];
-int         signalGroupCount = 0;
 
 double walkingSpeed = DEFAULT_WALKING_SPEED; // m/min
 
@@ -125,6 +114,90 @@ double getEdgeTimeSeconds(int from, int to) {
 
 /* ---------- ダイクストラ（信号制限なし・待ち時間なし） ---------- */
 
+// 信号エッジを除外したダイクストラ
+DijkstraResult dijkstraAvoidSignal(int start, int goal, int avoidEdgeIdx) {
+    double dist[MAX_NODES];
+    int    prev[MAX_NODES];
+    bool   used[MAX_NODES];
+
+    for (int i = 0; i < MAX_NODES; i++) {
+        dist[i] = INF;
+        prev[i] = -1;
+        used[i] = false;
+    }
+    dist[start] = 0.0;
+
+    while (1) {
+        int    u   = -1;
+        double d_u = INF;
+        for (int i = 0; i < MAX_NODES; i++) {
+            if (!used[i] && dist[i] < d_u) {
+                d_u = dist[i];
+                u   = i;
+            }
+        }
+        if (u == -1 || u == goal) break;
+        used[u] = true;
+
+        for (int i = 0; i < graph[u].edge_count; i++) {
+            int v       = graph[u].edges[i].node;
+            int edgeIdx = graph[u].edges[i].edgeIndex;
+            if (used[v]) continue;
+            
+            // 避けるべき信号エッジをスキップ
+            if (edgeIdx == avoidEdgeIdx) continue;
+
+            double t = getEdgeTimeSeconds(u, v);
+            if (t >= INF) continue;
+
+            double nd = dist[u] + t;
+            if (nd < dist[v]) {
+                dist[v] = nd;
+                prev[v] = u;
+            }
+        }
+    }
+
+    DijkstraResult res;
+    res.cost       = dist[goal];
+    res.pathLength = 0;
+
+    if (dist[goal] >= INF) {
+        return res;
+    }
+
+    // ノード列を復元 → エッジ列に変換
+    int nodes[MAX_PATH_LENGTH];
+    int nodeCount = 0;
+    int cur       = goal;
+
+    while (cur != -1 && cur != start && nodeCount < MAX_PATH_LENGTH) {
+        nodes[nodeCount++] = cur;
+        cur = prev[cur];
+    }
+    if (cur == -1) {
+        res.cost       = INF;
+        res.pathLength = 0;
+        return res;
+    }
+    nodes[nodeCount++] = start;
+
+    // 逆順でエッジに
+    for (int i = nodeCount - 1; i > 0; i--) {
+        int from = nodes[i];
+        int to   = nodes[i - 1];
+        int edgeIdx = findEdgeIndex(from, to);
+        if (edgeIdx < 0 || edgeIdx == avoidEdgeIdx) {
+            res.cost       = INF;
+            res.pathLength = 0;
+            return res;
+        }
+        res.path[res.pathLength++] = edgeIdx;
+    }
+
+    return res;
+}
+
 DijkstraResult dijkstra(int start, int goal) {
     double dist[MAX_NODES];
     int    prev[MAX_NODES];
@@ -150,7 +223,8 @@ DijkstraResult dijkstra(int start, int goal) {
         used[u] = true;
 
         for (int i = 0; i < graph[u].edge_count; i++) {
-            int v = graph[u].edges[i].node;
+            int v       = graph[u].edges[i].node;
+            int edgeIdx = graph[u].edges[i].edgeIndex;
             if (used[v]) continue;
 
             double t = getEdgeTimeSeconds(u, v);
@@ -403,98 +477,6 @@ void loadSignalData(const char *filename) {
     fprintf(stderr, "Loaded %d signals from signal_inf.csv\n", signalCount);
 }
 
-/* ---------- 信号グループ化 ---------- */
-
-// 2つのノード集合が同じ交差点に属するかチェック
-bool shareCommonNodes(int *nodes1, int count1, int *nodes2, int count2) {
-    for (int i = 0; i < count1; i++) {
-        for (int j = 0; j < count2; j++) {
-            if (nodes1[i] == nodes2[j]) return true;
-        }
-    }
-    return false;
-}
-
-// 信号エッジを交差点ごとにグループ化
-void groupSignalsByIntersection(void) {
-    signalGroupCount = 0;
-    bool used[MAX_SIGNALS] = {false};
-
-    for (int i = 0; i < signalCount; i++) {
-        if (used[i]) continue;
-
-        // 新しいグループを作成
-        SignalGroup *group = &signalGroups[signalGroupCount];
-        group->edgeCount = 0;
-        group->nodeCount = 0;
-
-        EdgeData *e1 = &edgeDataArray[signalEdges[i]];
-        int nodes1[2] = {e1->from, e1->to};
-
-        // このエッジをグループに追加
-        group->edgeIndices[group->edgeCount++] = signalEdges[i];
-        used[i] = true;
-
-        // このエッジのノードをグループのノード集合に追加
-        for (int k = 0; k < 2; k++) {
-            bool found = false;
-            for (int m = 0; m < group->nodeCount; m++) {
-                if (group->nodes[m] == nodes1[k]) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found && group->nodeCount < MAX_EDGES_PER_GROUP) {
-                group->nodes[group->nodeCount++] = nodes1[k];
-            }
-        }
-
-        // 同じ交差点に属する他の信号エッジを探す
-        for (int j = i + 1; j < signalCount; j++) {
-            if (used[j]) continue;
-
-            EdgeData *e2 = &edgeDataArray[signalEdges[j]];
-            int nodes2[2] = {e2->from, e2->to};
-
-            // 共通ノードがあるかチェック
-            if (shareCommonNodes(nodes1, 2, nodes2, 2) ||
-                shareCommonNodes(group->nodes, group->nodeCount, nodes2, 2)) {
-                // 同じグループに追加
-                if (group->edgeCount < MAX_EDGES_PER_GROUP) {
-                    group->edgeIndices[group->edgeCount++] = signalEdges[j];
-                    used[j] = true;
-
-                    // ノードを追加
-                    for (int k = 0; k < 2; k++) {
-                        bool found = false;
-                        for (int m = 0; m < group->nodeCount; m++) {
-                            if (group->nodes[m] == nodes2[k]) {
-                                found = true;
-                                break;
-                            }
-                        }
-                        if (!found && group->nodeCount < MAX_EDGES_PER_GROUP) {
-                            group->nodes[group->nodeCount++] = nodes2[k];
-                        }
-                    }
-                }
-            }
-        }
-
-        signalGroupCount++;
-        if (signalGroupCount >= MAX_SIGNAL_GROUPS) break;
-    }
-
-    fprintf(stderr, "Grouped signals into %d intersection groups\n", signalGroupCount);
-    for (int i = 0; i < signalGroupCount; i++) {
-        fprintf(stderr, "  Group %d: %d signals (nodes: ", i + 1, signalGroups[i].edgeCount);
-        for (int j = 0; j < signalGroups[i].nodeCount; j++) {
-            fprintf(stderr, "%d ", signalGroups[i].nodes[j]);
-        }
-        fprintf(stderr, ")\n");
-    }
-}
-
 /* ---------- 経路の結合 ---------- */
 
 // res に DijkstraResult の path を後ろから順に追加
@@ -503,61 +485,6 @@ bool appendSegment(RouteResult *res, const DijkstraResult *seg) {
         if (res->edgeCount >= MAX_PATH_LENGTH) return false;
         res->edges[res->edgeCount++] = seg->path[i];
     }
-    return true;
-}
-
-// 許可された信号エッジかチェック
-bool isAllowedSignal(int edgeIdx, int *allowedEdges, int allowedCount) {
-    for (int i = 0; i < allowedCount; i++) {
-        if (allowedEdges[i] == edgeIdx) return true;
-    }
-    return false;
-}
-
-// 複数の信号エッジを順に通る経路を生成（許可された信号のみ）
-bool buildRouteThroughSignals(RouteResult *r, int startNode, int endNode,
-                               int *signalEdgeIndices, int signalCount,
-                               int *allowedEdges, int allowedCount) {
-    r->edgeCount = 0;
-    int currentNode = startNode;
-
-    for (int i = 0; i < signalCount; i++) {
-        int edgeIdx = signalEdgeIndices[i];
-        
-        // 許可された信号かチェック
-        if (!isAllowedSignal(edgeIdx, allowedEdges, allowedCount)) {
-            return false;  // 許可されていない信号を通る経路は除外
-        }
-        
-        EdgeData *sig = &edgeDataArray[edgeIdx];
-        int sFrom = sig->from;
-        int sTo   = sig->to;
-
-        // 現在のノードから信号エッジの一端へ
-        DijkstraResult seg = dijkstra(currentNode, sFrom);
-        if (seg.cost >= INF) {
-            // もう一方の端を試す
-            seg = dijkstra(currentNode, sTo);
-            if (seg.cost >= INF) return false;
-            if (!appendSegment(r, &seg)) return false;
-            // 信号エッジを追加
-            if (r->edgeCount >= MAX_PATH_LENGTH) return false;
-            r->edges[r->edgeCount++] = edgeIdx;
-            currentNode = sFrom;  // 反対側の端へ
-        } else {
-            if (!appendSegment(r, &seg)) return false;
-            // 信号エッジを追加
-            if (r->edgeCount >= MAX_PATH_LENGTH) return false;
-            r->edges[r->edgeCount++] = edgeIdx;
-            currentNode = sTo;
-        }
-    }
-
-    // 最後の信号からゴールへ
-    DijkstraResult finalSeg = dijkstra(currentNode, endNode);
-    if (finalSeg.cost >= INF) return false;
-    if (!appendSegment(r, &finalSeg)) return false;
-
     return true;
 }
 
@@ -582,7 +509,10 @@ void printJSON(const RouteResult *routes, int routeCount) {
 
         printf("    \"signalEdgeIdx\": %d,\n", r->signalEdgeIdx);
         printf("    \"totalDistance\": %.2f,\n", r->totalDistance);
-        printf("    \"totalTime\": %.2f\n", r->totalTimeSeconds);
+        printf("    \"totalTime\": %.2f,\n", r->totalTimeSeconds / 60.0);
+        printf("    \"totalWaitTime\": 0.0,\n");
+        printf("    \"routeType\": %d,\n", r->routeType);
+        printf("    \"hasSignal\": %d\n", r->hasSignal);
         printf("  }");
         if (i < routeCount - 1) printf(",");
         printf("\n");
@@ -616,204 +546,232 @@ int main(int argc, char *argv[]) {
     loadSignalData("signal_inf.csv");
     fprintf(stderr, "Loaded %d signals total\n", signalCount);
 
-    // 指定された信号エッジのみを使用
-    int allowedSignalEdges[MAX_SIGNALS];
-    int allowedSignalCount = 0;
-    
-    // 許可された信号エッジのリスト（from-to形式）
-    struct {
-        int from;
-        int to;
-    } allowedSignals[] = {
-        {66, 211}, {210, 212}, {211, 212}, {66, 210},
-        {25, 196}, {196, 197}, {195, 197}, {25, 195},
-        {199, 200}, {198, 200}, {26, 198}, {26, 199}
-    };
-    int numAllowedSignals = sizeof(allowedSignals) / sizeof(allowedSignals[0]);
-    
-    fprintf(stderr, "\n=== Filtering allowed signals ===\n");
-    for (int i = 0; i < numAllowedSignals; i++) {
-        int edgeIdx = findEdgeIndex(allowedSignals[i].from, allowedSignals[i].to);
-        if (edgeIdx >= 0) {
-            allowedSignalEdges[allowedSignalCount++] = edgeIdx;
-            fprintf(stderr, "Allowed signal: edge %d (%d-%d)\n", 
-                    edgeIdx, allowedSignals[i].from, allowedSignals[i].to);
-        } else {
-            fprintf(stderr, "Warning: signal edge %d-%d not found in graph\n",
-                    allowedSignals[i].from, allowedSignals[i].to);
-        }
-    }
-    fprintf(stderr, "Total allowed signals: %d\n", allowedSignalCount);
-    
-    if (allowedSignalCount == 0) {
-        fprintf(stderr, "Error: No allowed signals found!\n");
-        return 1;
-    }
-    
-    // 信号を交差点ごとにグループ化（許可された信号のみ）
-    // まず、許可された信号のみをsignalEdgesに設定
-    signalCount = allowedSignalCount;
-    for (int i = 0; i < allowedSignalCount; i++) {
-        signalEdges[i] = allowedSignalEdges[i];
-    }
-    groupSignalsByIntersection();
-
-    // 基準時間1: 信号を通らない最短経路
-    fprintf(stderr, "\n=== Calculating reference times ===\n");
-    DijkstraResult shortestPath = dijkstra(startNode, endNode);
-    double referenceTime1 = shortestPath.cost;  // 最短経路の時間（秒）
-    fprintf(stderr, "Reference Time 1 (shortest path, no signals): %.2f sec\n", referenceTime1);
-
-    // 基準時間2: 1つの信号を通る最短経路の時間（許可された信号のみ）
-    double referenceTime2 = INF;
-    for (int i = 0; i < allowedSignalCount; i++) {
-        int edgeIdx = allowedSignalEdges[i];
-        EdgeData *sig = &edgeDataArray[edgeIdx];
-        int sFrom = sig->from;
-        int sTo   = sig->to;
-
-        // パターンA: Start → sFrom →(信号)→ sTo → Goal
-        DijkstraResult seg1 = dijkstra(startNode, sFrom);
-        DijkstraResult seg2 = dijkstra(sTo, endNode);
-        if (seg1.cost < INF && seg2.cost < INF) {
-            double totalTime = seg1.cost + getEdgeTimeSeconds(sFrom, sTo) + seg2.cost;
-            if (totalTime < referenceTime2) referenceTime2 = totalTime;
-        }
-
-        // パターンB: Start → sTo →(信号)→ sFrom → Goal
-        seg1 = dijkstra(startNode, sTo);
-        seg2 = dijkstra(sFrom, endNode);
-        if (seg1.cost < INF && seg2.cost < INF) {
-            double totalTime = seg1.cost + getEdgeTimeSeconds(sTo, sFrom) + seg2.cost;
-            if (totalTime < referenceTime2) referenceTime2 = totalTime;
-        }
-    }
-    if (referenceTime2 >= INF) referenceTime2 = referenceTime1 * 1.5;  // フォールバック
-    fprintf(stderr, "Reference Time 2 (shortest path with 1 signal): %.2f sec\n", referenceTime2);
-
-    // フィルタリングの閾値: 基準時間2の1.5倍を超える経路は除外
-    double timeThreshold = referenceTime2 * 1.5;
-    fprintf(stderr, "Time threshold for filtering: %.2f sec (%.1fx of reference time 2)\n", 
-            timeThreshold, 1.5);
-
-    // 経路を生成（最大数を増やす）
-    RouteResult routes[MAX_SIGNALS * 20];  // 十分なサイズを確保
+    // 経路を保存する配列（最短経路 + 信号経路 + 信号回避経路）
+    RouteResult routes[MAX_SIGNALS * 2 + 10];  // 余裕を持たせる
+    RouteResult allRoutes[MAX_SIGNALS * 2 + 10];  // 全経路を一時保存
     int routeCount = 0;
+    int allRouteCount = 0;
 
-    fprintf(stderr, "\n=== Generating routes ===\n");
+    // 1. 最短経路（信号を考慮しない）を生成
+    fprintf(stderr, "\n=== 最短経路を計算 ===\n");
+    DijkstraResult shortestPath = dijkstra(startNode, endNode);
+    RouteResult baseTime1Route;
+    bool hasBaseTime1Route = false;
+    
+    if (shortestPath.cost < INF) {
+        RouteResult r;
+        r.signalEdgeIdx = -1;
+        r.edgeCount = 0;
+        r.routeType = 2;  // まずはその他として分類（後で基準時刻1に変更）
+        
+        // 経路に信号が含まれるかチェック
+        r.hasSignal = 0;
+        for (int i = 0; i < shortestPath.pathLength; i++) {
+            int edgeIdx = shortestPath.path[i];
+            if (edgeIdx >= 0 && edgeIdx < edgeDataCount) {
+                if (edgeDataArray[edgeIdx].isSignal) {
+                    r.hasSignal = 1;
+                    r.signalEdgeIdx = edgeIdx;
+                    break;
+                }
+            }
+        }
+        
+        if (appendSegment(&r, &shortestPath)) {
+            calcRouteMetrics(r.edges, r.edgeCount,
+                             &r.totalDistance, &r.totalTimeSeconds);
+            baseTime1Route = r;  // 基準時刻1の経路として保存
+            hasBaseTime1Route = true;
+            allRoutes[allRouteCount++] = r;
+            fprintf(stderr,
+                    "最短経路: edges=%d, time=%.2f sec, hasSignal=%d\n",
+                    r.edgeCount, r.totalTimeSeconds, r.hasSignal);
+        }
+    }
 
-    // パターン1: 1つの信号を通る経路（許可された信号のみ）
-    fprintf(stderr, "\n[Pattern 1] Routes through 1 signal:\n");
-    for (int i = 0; i < allowedSignalCount; i++) {
-        int edgeIdx = allowedSignalEdges[i];
+    // 2. 信号を含む経路を生成（全てその他として分類）
+    int useSignals = signalCount;
+    if (useSignals > 12) useSignals = 12;  // 「12個分」だけを見る場合
+
+    for (int i = 0; i < useSignals; i++) {
+        int edgeIdx = signalEdges[i];
         EdgeData *sig = &edgeDataArray[edgeIdx];
         int sFrom = sig->from;
         int sTo   = sig->to;
 
-        // パターンA: Start → sFrom →(信号)→ sTo → Goal
-        DijkstraResult seg1 = dijkstra(startNode, sFrom);
-        DijkstraResult seg2 = dijkstra(sTo, endNode);
-        if (seg1.cost < INF && seg2.cost < INF) {
-            RouteResult r;
-            r.signalEdgeIdx = edgeIdx;
-            r.edgeCount = 0;
-            if (appendSegment(&r, &seg1)) {
-                if (r.edgeCount < MAX_PATH_LENGTH)
-                    r.edges[r.edgeCount++] = edgeIdx;
-                if (appendSegment(&r, &seg2)) {
-                    calcRouteMetrics(r.edges, r.edgeCount,
-                                     &r.totalDistance, &r.totalTimeSeconds);
-                    // 時間閾値でフィルタリング
-                    if (r.totalTimeSeconds <= timeThreshold) {
-                        routes[routeCount++] = r;
+        fprintf(stderr,
+                "\n=== Signal %d (edgeIdx=%d, %d-%d) ===\n",
+                i + 1, edgeIdx, sFrom, sTo);
+
+        /* パターンA: Start → sFrom →(信号エッジ)→ sTo → Goal */
+        {
+            DijkstraResult seg1 = dijkstra(startNode, sFrom);
+            DijkstraResult seg2 = dijkstra(sTo, endNode);
+
+            if (seg1.cost < INF && seg2.cost < INF) {
+                RouteResult r;
+                r.signalEdgeIdx = edgeIdx;
+                r.edgeCount      = 0;
+                r.routeType = 2;  // その他（赤）
+                r.hasSignal = 1;  // 信号を含む
+
+                if (appendSegment(&r, &seg1)) {
+                    // 信号エッジ自身を1本挿入
+                    if (r.edgeCount < MAX_PATH_LENGTH)
+                        r.edges[r.edgeCount++] = edgeIdx;
+
+                    if (appendSegment(&r, &seg2)) {
+                        calcRouteMetrics(r.edges, r.edgeCount,
+                                         &r.totalDistance, &r.totalTimeSeconds);
+                        allRoutes[allRouteCount++] = r;
+                        fprintf(stderr,
+                                "Pattern A: path found (edges=%d, time=%.2f sec)\n",
+                                r.edgeCount, r.totalTimeSeconds);
                     }
                 }
+            } else {
+                fprintf(stderr,
+                        "Pattern A: no path (Start->%d or %d->Goal unreachable)\n",
+                        sFrom, sTo);
             }
         }
 
-        // パターンB: Start → sTo →(信号)→ sFrom → Goal
-        seg1 = dijkstra(startNode, sTo);
-        seg2 = dijkstra(sFrom, endNode);
-        if (seg1.cost < INF && seg2.cost < INF) {
-            RouteResult r;
-            r.signalEdgeIdx = edgeIdx;
-            r.edgeCount = 0;
-            if (appendSegment(&r, &seg1)) {
-                if (r.edgeCount < MAX_PATH_LENGTH)
-                    r.edges[r.edgeCount++] = edgeIdx;
-                if (appendSegment(&r, &seg2)) {
-                    calcRouteMetrics(r.edges, r.edgeCount,
-                                     &r.totalDistance, &r.totalTimeSeconds);
-                    // 時間閾値でフィルタリング
-                    if (r.totalTimeSeconds <= timeThreshold) {
-                        routes[routeCount++] = r;
+        /* パターンB: Start → sTo →(信号エッジ)→ sFrom → Goal */
+        {
+            DijkstraResult seg1 = dijkstra(startNode, sTo);
+            DijkstraResult seg2 = dijkstra(sFrom, endNode);
+
+            if (seg1.cost < INF && seg2.cost < INF) {
+                RouteResult r;
+                r.signalEdgeIdx = edgeIdx;
+                r.edgeCount      = 0;
+                r.routeType = 2;  // その他（赤）
+                r.hasSignal = 1;  // 信号を含む
+
+                if (appendSegment(&r, &seg1)) {
+                    if (r.edgeCount < MAX_PATH_LENGTH)
+                        r.edges[r.edgeCount++] = edgeIdx;
+
+                    if (appendSegment(&r, &seg2)) {
+                        calcRouteMetrics(r.edges, r.edgeCount,
+                                         &r.totalDistance, &r.totalTimeSeconds);
+                        allRoutes[allRouteCount++] = r;
+                        fprintf(stderr,
+                                "Pattern B: path found (edges=%d, time=%.2f sec)\n",
+                                r.edgeCount, r.totalTimeSeconds);
                     }
                 }
+            } else {
+                fprintf(stderr,
+                        "Pattern B: no path (Start->%d or %d->Goal unreachable)\n",
+                        sTo, sFrom);
             }
+
         }
     }
-    fprintf(stderr, "  Generated %d routes through 1 signal\n", routeCount);
 
-    // パターン2: 2つの信号を通る経路（許可された信号のみ、異なる2つ）
-    fprintf(stderr, "\n[Pattern 2] Routes through 2 signals:\n");
-    int pattern2Start = routeCount;
-    for (int i1 = 0; i1 < allowedSignalCount; i1++) {
-        for (int i2 = i1 + 1; i2 < allowedSignalCount; i2++) {
-            int edgeIdx1 = allowedSignalEdges[i1];
-            int edgeIdx2 = allowedSignalEdges[i2];
-            int signals[2] = {edgeIdx1, edgeIdx2};
-
-            RouteResult r;
-            r.signalEdgeIdx = edgeIdx1;  // 最初の信号を記録
-            if (buildRouteThroughSignals(&r, startNode, endNode, signals, 2,
-                                         allowedSignalEdges, allowedSignalCount)) {
-                calcRouteMetrics(r.edges, r.edgeCount,
-                                 &r.totalDistance, &r.totalTimeSeconds);
-                // 時間閾値でフィルタリング
-                if (r.totalTimeSeconds <= timeThreshold) {
-                    routes[routeCount++] = r;
-                    if (routeCount >= MAX_SIGNALS * 20) goto route_limit;
+    // 3. 信号を避けた経路を探索（基準時刻2用 - 最短経路のみ）
+    fprintf(stderr, "\n=== 信号を避けた経路を計算（基準時刻2） ===\n");
+    RouteResult baseTime2Route;
+    bool hasBaseTime2Route = false;
+    
+    // 最短経路に信号が含まれている場合、その信号を避けた最短経路を探索
+    if (hasBaseTime1Route && baseTime1Route.hasSignal == 1) {
+        // 最短経路に信号がある場合：基準時刻1（青）= 最短経路、基準時刻2（緑）= 信号回避経路
+        int firstRouteSignalIdx = baseTime1Route.signalEdgeIdx;
+        if (firstRouteSignalIdx >= 0) {
+            // 最短経路に含まれる信号を避けた最短経路を探索
+            DijkstraResult avoidPath = dijkstraAvoidSignal(startNode, endNode, firstRouteSignalIdx);
+            if (avoidPath.cost < INF) {
+                RouteResult r;
+                r.signalEdgeIdx = -1;
+                r.edgeCount = 0;
+                r.routeType = 1;  // 基準時刻2（緑）
+                r.hasSignal = 0;  // 信号を含まない
+                
+                if (appendSegment(&r, &avoidPath)) {
+                    calcRouteMetrics(r.edges, r.edgeCount,
+                                     &r.totalDistance, &r.totalTimeSeconds);
+                    baseTime2Route = r;
+                    hasBaseTime2Route = true;
+                    fprintf(stderr,
+                            "基準時刻2（信号回避最短経路）: edges=%d, time=%.2f sec\n",
+                            r.edgeCount, r.totalTimeSeconds);
                 }
             }
         }
+    } else if (hasBaseTime1Route && baseTime1Route.hasSignal == 0) {
+        // 最短経路に信号がない場合：基準時刻1（青）は表示せず、基準時刻2（緑）= 最短経路
+        baseTime2Route = baseTime1Route;
+        baseTime2Route.routeType = 1;  // 基準時刻2（緑）
+        hasBaseTime2Route = true;
+        hasBaseTime1Route = false;  // 基準時刻1（青）は表示しない
+        fprintf(stderr,
+                "最短経路に信号なし: 基準時刻2（緑）として最短経路を使用\n");
     }
-    fprintf(stderr, "  Generated %d routes through 2 signals\n", routeCount - pattern2Start);
-
-    // パターン3: 全ての許可された信号を通る経路（許可された信号のみ）
-    fprintf(stderr, "\n[Pattern 3] Routes through all allowed signals:\n");
-    int pattern3Start = routeCount;
-    if (allowedSignalCount > 0 && allowedSignalCount <= 12) {  // 許可された信号数が12個以下なら全組み合わせを試す
-        int selectedEdges[12];  // 最大12個
+    
+    // 4. 経路を分類して最終出力用に整理
+    fprintf(stderr, "\n=== 経路を分類 ===\n");
+    
+    // 基準時刻1の経路を追加（青）- 最短経路に信号がある場合のみ
+    if (hasBaseTime1Route) {
+        baseTime1Route.routeType = 0;  // 基準時刻1（青）
+        routes[routeCount++] = baseTime1Route;
+        fprintf(stderr, "基準時刻1（青）: 1本追加\n");
+    }
+    
+    // 基準時刻2の経路を追加（緑）
+    if (hasBaseTime2Route) {
+        routes[routeCount++] = baseTime2Route;
+        fprintf(stderr, "基準時刻2（緑）: 1本追加\n");
+    }
+    
+    // その他の経路を追加（赤）
+    for (int i = 0; i < allRouteCount; i++) {
+        // 基準時刻1と基準時刻2の経路は除外
+        bool isBaseTime1 = false;
+        bool isBaseTime2 = false;
         
-        // 許可された信号の全組み合わせを生成（再帰的ではなく、ネストしたループで）
-        // 3個以上の信号を通る経路を生成
-        if (allowedSignalCount >= 3) {
-            for (int i1 = 0; i1 < allowedSignalCount && routeCount < MAX_SIGNALS * 20; i1++) {
-                for (int i2 = i1 + 1; i2 < allowedSignalCount && routeCount < MAX_SIGNALS * 20; i2++) {
-                    for (int i3 = i2 + 1; i3 < allowedSignalCount && routeCount < MAX_SIGNALS * 20; i3++) {
-                        selectedEdges[0] = allowedSignalEdges[i1];
-                        selectedEdges[1] = allowedSignalEdges[i2];
-                        selectedEdges[2] = allowedSignalEdges[i3];
-                        RouteResult r;
-                        r.signalEdgeIdx = selectedEdges[0];
-                        if (buildRouteThroughSignals(&r, startNode, endNode, selectedEdges, 3,
-                                                      allowedSignalEdges, allowedSignalCount)) {
-                            calcRouteMetrics(r.edges, r.edgeCount, &r.totalDistance, &r.totalTimeSeconds);
-                            if (r.totalTimeSeconds <= timeThreshold) {
-                                routes[routeCount++] = r;
-                            }
-                        }
-                    }
+        // 基準時刻1の経路との比較（hasBaseTime1Routeがfalseでも比較は行う）
+        if (allRoutes[i].edgeCount == baseTime1Route.edgeCount) {
+            bool same = true;
+            for (int j = 0; j < allRoutes[i].edgeCount; j++) {
+                if (allRoutes[i].edges[j] != baseTime1Route.edges[j]) {
+                    same = false;
+                    break;
                 }
             }
+            if (same) isBaseTime1 = true;
         }
-    } else if (allowedSignalCount > 12) {
-        fprintf(stderr, "  Skipped: too many allowed signals (%d) for exhaustive search\n", allowedSignalCount);
+        
+        // 基準時刻2の経路との比較（hasBaseTime2Routeがfalseでも比較は行う）
+        if (hasBaseTime2Route && allRoutes[i].edgeCount == baseTime2Route.edgeCount) {
+            bool same = true;
+            for (int j = 0; j < allRoutes[i].edgeCount; j++) {
+                if (allRoutes[i].edges[j] != baseTime2Route.edges[j]) {
+                    same = false;
+                    break;
+                }
+            }
+            if (same) isBaseTime2 = true;
+        }
+        
+        // 基準時刻1または基準時刻2に該当する経路は除外
+        // 最短経路に信号がない場合、baseTime1RouteとbaseTime2Routeは同じ経路なので、どちらかのチェックで除外される
+        if (!isBaseTime1 && !isBaseTime2) {
+            allRoutes[i].routeType = 2;  // その他（赤）
+            routes[routeCount++] = allRoutes[i];
+        } else {
+            // 除外された経路をログ出力
+            fprintf(stderr, "経路%dを除外（基準時刻1/2と重複）\n", i);
+        }
     }
-    fprintf(stderr, "  Generated %d routes through all signals\n", routeCount - pattern3Start);
-
-route_limit:
+    
     fprintf(stderr, "\nGenerated %d routes in total.\n", routeCount);
+    fprintf(stderr, "- 基準時刻1（青）: %d本\n", hasBaseTime1Route ? 1 : 0);
+    fprintf(stderr, "- 基準時刻2（緑）: %d本\n", hasBaseTime2Route ? 1 : 0);
+    fprintf(stderr, "- その他（赤）: %d本\n", routeCount - (hasBaseTime1Route ? 1 : 0) - (hasBaseTime2Route ? 1 : 0));
+    
     printJSON(routes, routeCount);
 
     return 0;

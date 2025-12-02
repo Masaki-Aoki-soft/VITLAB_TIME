@@ -186,33 +186,133 @@ export default function Home() {
     const drawAllRoutes = async (routes: RouteResult[]) => {
         if (!routes || routes.length === 0) return;
 
-        const redColor = '#ff4757';
         const geojsonFolder = 'oomiya_line/';
-
-        // 重複する経路を除外
-        const uniqueRoutes: RouteResult[] = [];
+        
+        // 基準時刻1（青）、基準時刻2（緑）、その他（赤）で分類
+        let baseTime1Route: RouteResult | null = null;  // 基準時刻1（青）- 1本のみ
+        let baseTime2Route: RouteResult | null = null;  // 基準時刻2（緑）- 1本のみ
+        const otherRoutes: RouteResult[] = [];  // その他（赤）
+        
+        // 重複する経路を除外（userPrefだけでなく、routeTypeも考慮）
         const seenRoutes = new Set<string>();
         for (const route of routes) {
             const routeKey = route.userPref.trim();
-            if (!seenRoutes.has(routeKey)) {
+            const routeType = route.routeType ?? 2;  // デフォルトはその他
+            
+            // 基準時刻1（routeType=0）と基準時刻2（routeType=1）が同じ経路（userPref）の場合、
+            // 基準時刻2のみを表示（最短経路に信号がない場合）
+            if (routeType === 0 || routeType === 1) {
+                // 同じuserPrefを持つ経路が既に存在するかチェック
+                if (seenRoutes.has(routeKey)) {
+                    // 既に同じ経路が存在する場合、routeType=1（基準時刻2）を優先
+                    if (routeType === 1) {
+                        // 基準時刻2で上書き（基準時刻1を削除）
+                        if (baseTime1Route && baseTime1Route.userPref.trim() === routeKey) {
+                            baseTime1Route = null;
+                        }
+                        baseTime2Route = route;
+                    }
+                    // routeType=0（基準時刻1）の場合は既存の基準時刻2を優先してスキップ
+                    continue;
+                }
                 seenRoutes.add(routeKey);
-                uniqueRoutes.push(route);
+            } else {
+                // その他の経路（routeType=2）は重複チェック
+                if (seenRoutes.has(routeKey)) {
+                    continue;
+                }
+                seenRoutes.add(routeKey);
+            }
+            
+            if (routeType === 0) {
+                // 基準時刻1（最初の1本のみ）
+                if (!baseTime1Route) {
+                    baseTime1Route = route;
+                }
+            } else if (routeType === 1) {
+                // 基準時刻2（最初の1本のみ）
+                if (!baseTime2Route) {
+                    baseTime2Route = route;
+                }
+            } else {
+                // その他
+                otherRoutes.push(route);
             }
         }
-
-        if (uniqueRoutes.length > 0) {
+        
+        // 基準時刻1の経路を設定
+        if (baseTime1Route) {
             setRoute1({
-                totalDistance: uniqueRoutes[0].totalDistance,
-                totalTime: uniqueRoutes[0].totalTime,
-                totalWaitTime: uniqueRoutes[0].totalWaitTime,
+                totalDistance: baseTime1Route.totalDistance,
+                totalTime: baseTime1Route.totalTime,
+                totalWaitTime: baseTime1Route.totalWaitTime || 0,
+            });
+        }
+        
+        // 基準時刻2の経路を設定
+        if (baseTime2Route) {
+            setRoute2({
+                totalDistance: baseTime2Route.totalDistance,
+                totalTime: baseTime2Route.totalTime,
+                totalWaitTime: baseTime2Route.totalWaitTime || 0,
             });
         }
 
         // 経路を描画（react-leaflet用にstateに追加）
         const newLayers: Array<{ data: any; style: any }> = [];
-        for (const route of uniqueRoutes) {
+        
+        // 基準時刻1（青）の経路を描画（1本のみ）
+        const blueColor = '#3742fa';
+        if (baseTime1Route) {
+            const segments = baseTime1Route.userPref.split('\n').filter((line) => line.trim() !== '');
+            for (const filename of segments) {
+                try {
+                    const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
+                    const response = await fetch(filePath);
+                    if (!response.ok) continue;
+                    const data = await response.json();
+                    newLayers.push({
+                        data,
+                        style: {
+                            color: blueColor,
+                            weight: 8,
+                            opacity: 0.8,
+                        },
+                    });
+                } catch (err) {
+                    console.warn(`Error loading ${filename}:`, err);
+                }
+            }
+        }
+        
+        // 基準時刻2（緑）の経路を描画（1本のみ）
+        const greenColor = '#2ed573';
+        if (baseTime2Route) {
+            const segments = baseTime2Route.userPref.split('\n').filter((line) => line.trim() !== '');
+            for (const filename of segments) {
+                try {
+                    const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
+                    const response = await fetch(filePath);
+                    if (!response.ok) continue;
+                    const data = await response.json();
+                    newLayers.push({
+                        data,
+                        style: {
+                            color: greenColor,
+                            weight: 8,
+                            opacity: 0.8,
+                        },
+                    });
+                } catch (err) {
+                    console.warn(`Error loading ${filename}:`, err);
+                }
+            }
+        }
+        
+        // その他の経路（赤）を描画
+        const redColor = '#ff4757';
+        for (const route of otherRoutes) {
             const segments = route.userPref.split('\n').filter((line) => line.trim() !== '');
-
             for (const filename of segments) {
                 try {
                     const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
@@ -232,6 +332,7 @@ export default function Home() {
                 }
             }
         }
+        
         setRouteLayers(newLayers);
     };
 
@@ -250,9 +351,10 @@ export default function Home() {
             new Promise<string>(async (resolve, reject) => {
                 try {
                     const route = foundRoutes[nextIndex];
-                    const routeId = (nextIndex % 2) + 1;
-                    const color = routeId === 1 ? '#ff4757' : '#3742fa';
-                    const weight = routeId === 1 ? 10 : 6;
+                    const routeType = route.routeType ?? 2;  // デフォルトはその他
+                    // 基準時刻1（routeType=0）は青、基準時刻2（routeType=1）は緑、その他（routeType=2）は赤
+                    const color = routeType === 0 ? '#3742fa' : (routeType === 1 ? '#2ed573' : '#ff4757');
+                    const weight = 8;
 
                     const segments = route.userPref
                         .split('\n')
@@ -280,19 +382,20 @@ export default function Home() {
                     }
                     setRouteLayers(newLayers);
 
-                    if (routeId === 1) {
+                    if (routeType === 0) {
                         setRoute1({
                             totalDistance: route.totalDistance,
                             totalTime: route.totalTime,
-                            totalWaitTime: route.totalWaitTime,
+                            totalWaitTime: route.totalWaitTime || 0,
                         });
-                    } else {
+                    } else if (routeType === 1) {
                         setRoute2({
                             totalDistance: route.totalDistance,
                             totalTime: route.totalTime,
-                            totalWaitTime: route.totalWaitTime,
+                            totalWaitTime: route.totalWaitTime || 0,
                         });
                     }
+                    // routeType=2（その他）の場合は、route1/route2を更新しない
                     resolve(`経路 ${nextIndex + 1} を表示しました`);
                 } catch (error: any) {
                     console.error('次の経路の表示中にエラーが発生しました:', error);
