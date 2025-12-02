@@ -166,7 +166,7 @@ export default function Home() {
         setRoute1(null);
         setRoute2(null);
         setSavedRoute(null);
-        
+
         setIsLoading(true);
         toast.promise(
             new Promise<string>(async (resolve, reject) => {
@@ -202,27 +202,27 @@ export default function Home() {
         if (!routes || routes.length === 0) return;
 
         const geojsonFolder = 'oomiya_line/';
-        
+
         // 新しいロジックに基づく分類：
         // routeType=0（青）: 基準時刻2（基準時刻1 >= 基準時刻2の場合のみ表示）
         // routeType=1（緑）: 基準時刻1
         // routeType=2（赤）: 最短全網羅経路（信号待ち時間を含めた総時間が最短、1本のみ）
-        let baseTime1Route: RouteResult | null = null;  // 基準時刻1（緑）- routeType=1
-        let baseTime2Route: RouteResult | null = null;  // 基準時刻2（青）- routeType=0
-        let bestEnumRoute: RouteResult | null = null;  // 最短全網羅経路（赤）- routeType=2
-        
+        let baseTime1Route: RouteResult | null = null; // 基準時刻1（緑）- routeType=1
+        let baseTime2Route: RouteResult | null = null; // 基準時刻2（青）- routeType=0
+        let bestEnumRoute: RouteResult | null = null; // 最短全網羅経路（赤）- routeType=2
+
         // 重複する経路を除外
         const seenRoutes = new Set<string>();
         for (const route of routes) {
             const routeKey = route.userPref.trim();
-            const routeType = route.routeType ?? 2;  // デフォルトは全網羅
-            
+            const routeType = route.routeType ?? 2; // デフォルトは全網羅
+
             // 重複チェック（同じuserPrefは1回だけ追加）
             if (seenRoutes.has(routeKey)) {
                 continue;
             }
             seenRoutes.add(routeKey);
-            
+
             if (routeType === 0) {
                 // 基準時刻2（青）- 最初の1本のみ
                 if (!baseTime2Route) {
@@ -240,7 +240,7 @@ export default function Home() {
                 }
             }
         }
-        
+
         // 基準時刻1（緑）の経路を設定
         if (baseTime1Route) {
             setRoute1({
@@ -249,7 +249,7 @@ export default function Home() {
                 totalWaitTime: baseTime1Route.totalWaitTime || 0,
             });
         }
-        
+
         // 基準時刻2（青）の経路を設定
         if (baseTime2Route) {
             setRoute2({
@@ -258,7 +258,7 @@ export default function Home() {
                 totalWaitTime: baseTime2Route.totalWaitTime || 0,
             });
         }
-        
+
         // 最短全網羅経路（赤）をbestEnumRouteとして設定
         if (bestEnumRoute) {
             setBestEnumRoute({
@@ -273,11 +273,13 @@ export default function Home() {
 
         // 経路を描画（react-leaflet用にstateに追加）
         const newLayers: Array<{ data: any; style: any }> = [];
-        
+
         // 基準時刻1（緑）の経路を描画（1本のみ）
         const greenColor = '#2ed573';
         if (baseTime1Route) {
-            const segments = baseTime1Route.userPref.split('\n').filter((line) => line.trim() !== '');
+            const segments = baseTime1Route.userPref
+                .split('\n')
+                .filter((line) => line.trim() !== '');
             for (const filename of segments) {
                 try {
                     const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
@@ -297,11 +299,13 @@ export default function Home() {
                 }
             }
         }
-        
+
         // 基準時刻2（青）の経路を描画（1本のみ）
         const blueColor = '#3742fa';
         if (baseTime2Route) {
-            const segments = baseTime2Route.userPref.split('\n').filter((line) => line.trim() !== '');
+            const segments = baseTime2Route.userPref
+                .split('\n')
+                .filter((line) => line.trim() !== '');
             for (const filename of segments) {
                 try {
                     const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
@@ -321,11 +325,13 @@ export default function Home() {
                 }
             }
         }
-        
+
         // 最短全網羅経路（赤）を描画（1本のみ）
         const redColor = '#ff4757';
         if (bestEnumRoute) {
-            const segments = bestEnumRoute.userPref.split('\n').filter((line) => line.trim() !== '');
+            const segments = bestEnumRoute.userPref
+                .split('\n')
+                .filter((line) => line.trim() !== '');
             for (const filename of segments) {
                 try {
                     const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
@@ -345,84 +351,77 @@ export default function Home() {
                 }
             }
         }
-        
+
         setRouteLayers(newLayers);
     };
 
-    // 次の経路を表示
+    // 全経路を表示（第三段階の全網羅経路を全て黄色で表示）
     const loadRouteFromCSV2 = async () => {
         if (!foundRoutes || foundRoutes.length === 0) {
             toast.error('まず「経路を検索」してください。');
             return;
         }
 
-        const nextIndex = (currentRouteIndex + 1) % foundRoutes.length;
-        setCurrentRouteIndex(nextIndex);
+        // routeType=3（全網羅経路）のみをフィルタリング
+        const allEnumRoutes = foundRoutes.filter((route) => route.routeType === 3);
+
+        if (allEnumRoutes.length === 0) {
+            toast.error('全網羅経路が見つかりませんでした。');
+            return;
+        }
+
         setIsLoading(true);
 
         toast.promise(
             new Promise<string>(async (resolve, reject) => {
                 try {
-                    const route = foundRoutes[nextIndex];
-                    const routeType = route.routeType ?? 2;  // デフォルトは最短全網羅
-                    // routeType=0（基準時刻2）は青、routeType=1（基準時刻1）は緑、routeType=2（最短全網羅）は赤
-                    const color = routeType === 0 ? '#3742fa' 
-                        : (routeType === 1 ? '#2ed573' 
-                        : '#ff4757');
-                    const weight = 8;
-
-                    const segments = route.userPref
-                        .split('\n')
-                        .filter((line) => line.trim() !== '');
                     const geojsonFolder = 'oomiya_line/';
+                    const yellowColor = '#ffd700'; // 黄色
+                    const weight = 6;
 
                     const newLayers: Array<{ data: any; style: any }> = [];
-                    for (const filename of segments) {
-                        try {
-                            const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
-                            const response = await fetch(filePath);
-                            if (!response.ok) continue;
-                            const data = await response.json();
-                            newLayers.push({
-                                data,
-                                style: {
-                                    color: color,
-                                    weight: weight,
-                                    opacity: 1.0,
-                                },
-                            });
-                        } catch (err) {
-                            console.warn(`Error loading ${filename}:`, err);
+
+                    // 既存の経路レイヤーを保持（青・緑・赤）
+                    const existingLayers = routeLayers;
+                    newLayers.push(...existingLayers);
+
+                    // 全網羅経路（routeType=3）を全て黄色で追加
+                    for (const route of allEnumRoutes) {
+                        const segments = route.userPref
+                            .split('\n')
+                            .filter((line) => line.trim() !== '');
+
+                        for (const filename of segments) {
+                            try {
+                                const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
+                                const response = await fetch(filePath);
+                                if (!response.ok) continue;
+                                const data = await response.json();
+                                newLayers.push({
+                                    data,
+                                    style: {
+                                        color: yellowColor,
+                                        weight: weight,
+                                        opacity: 0.7,
+                                    },
+                                });
+                            } catch (err) {
+                                console.warn(`Error loading ${filename}:`, err);
+                            }
                         }
                     }
                     setRouteLayers(newLayers);
 
-                    if (routeType === 1) {
-                        // routeType=1: 基準時刻1（緑）
-                        setRoute1({
-                            totalDistance: route.totalDistance,
-                            totalTime: route.totalTime,
-                            totalWaitTime: route.totalWaitTime || 0,
-                        });
-                    } else if (routeType === 0) {
-                        // routeType=0: 基準時刻2（青）
-                        setRoute2({
-                            totalDistance: route.totalDistance,
-                            totalTime: route.totalTime,
-                            totalWaitTime: route.totalWaitTime || 0,
-                        });
-                    }
-                    // routeType=2（全網羅）の場合は、route1/route2を更新しない
-                    resolve(`経路 ${nextIndex + 1} を表示しました`);
+                    resolve(`${allEnumRoutes.length}本の全網羅経路を黄色で表示しました`);
                 } catch (error: any) {
-                    console.error('次の経路の表示中にエラーが発生しました:', error);
+                    console.error('全経路の表示中にエラーが発生しました:', error);
                     reject(error.message || 'エラーが発生しました');
                 } finally {
                     setIsLoading(false);
                 }
             }),
             {
-                loading: `経路 ${nextIndex + 1} を表示中...`,
+                loading: '全網羅経路を表示中...',
                 success: (message: string) => message,
                 error: (message: string) => message,
             }
@@ -1014,9 +1013,9 @@ export default function Home() {
                                     <button
                                         onClick={loadRouteFromCSV2}
                                         disabled={isLoading}
-                                        className="w-full bg-blue-500 hover:bg-blue-600 text-white text-sm py-2 rounded-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        className="w-full bg-yellow-500 hover:bg-yellow-600 text-white text-sm py-2 rounded-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
-                                        <i className="fas fa-route"></i>次の経路を表示
+                                        <i className="fas fa-route"></i>全経路を表示
                                     </button>
                                     <button
                                         onClick={clearGeoJSON}

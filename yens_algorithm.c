@@ -1588,8 +1588,8 @@ void printJSON(const RouteResult *routes, int routeCount) {
         
         // 待ち時間を計算
         double totalWaitTime = 0.0;
-        if (r->routeType == 2) {
-            // 最短全網羅経路（赤）の場合、サイクルベース計算で得られた待ち時間を使用
+        if (r->routeType == 2 || r->routeType == 3) {
+            // 最短全網羅経路（赤）または全網羅経路（黄）の場合、サイクルベース計算で得られた待ち時間を使用
             double dist, timeSec, waitTimeSec;
             calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
             totalWaitTime = waitTimeSec / 60.0;  // 秒を分に変換
@@ -1793,7 +1793,7 @@ int main(int argc, char *argv[]) {
         }
         fprintf(stderr, "全%d本の経路をチェックしました（重複除外後: %d本）\n", allEnumRouteCount, checkedCount);
         
-        // 最短の全網羅経路のみを赤色で追加（1本のみ）
+        // 最短の全網羅経路を赤色で追加（1本のみ）
         if (bestEnumRouteIdx >= 0) {
             allEnumRoutes[bestEnumRouteIdx].routeType = 2;  // 赤
             routes[routeCount++] = allEnumRoutes[bestEnumRouteIdx];
@@ -1803,6 +1803,39 @@ int main(int argc, char *argv[]) {
                     allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds,
                     allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds / 60.0);
         }
+        
+        // その他の全網羅経路を黄色で追加（routeType=3）
+        int yellowCount = 0;
+        for (int i = 0; i < allEnumRouteCount; i++) {
+            if (i == bestEnumRouteIdx) continue;  // 最短経路は既に追加済み
+            
+            RouteResult *r = &allEnumRoutes[i];
+            
+            // 基準時刻2と重複していない経路のみを追加
+            bool isBaseTime2 = false;
+            if (hasBaseTime2Route && r->edgeCount == baseTime2Route.edgeCount) {
+                bool same = true;
+                for (int j = 0; j < r->edgeCount; j++) {
+                    if (r->edges[j] != baseTime2Route.edges[j]) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) isBaseTime2 = true;
+            }
+            
+            if (!isBaseTime2 && routeCount < MAX_SIGNALS * 4 + 20) {
+                // サイクルベースの厳密な待ち時間計算で再計算
+                double dist, timeSec, waitTimeSec;
+                calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
+                r->totalDistance = dist;
+                r->totalTimeSeconds = timeSec;
+                r->routeType = 3;  // 黄色（全網羅経路）
+                routes[routeCount++] = *r;
+                yellowCount++;
+            }
+        }
+        fprintf(stderr, "全網羅経路（黄色）: %d本追加\n", yellowCount);
     }
     // 基準時刻1 < 基準時刻2 の場合
     else if (baseTime1Seconds < baseTime2Seconds) {
@@ -1902,7 +1935,7 @@ int main(int argc, char *argv[]) {
         }
         fprintf(stderr, "全%d本の経路をチェックしました（重複除外後: %d本）\n", allEnumRouteCount, checkedCount);
         
-        // 最短の全網羅経路のみを赤色で追加（1本のみ）
+        // 最短の全網羅経路を赤色で追加（1本のみ）
         if (bestEnumRouteIdx >= 0) {
             allEnumRoutes[bestEnumRouteIdx].routeType = 2;  // 赤
             routes[routeCount++] = allEnumRoutes[bestEnumRouteIdx];
@@ -1912,18 +1945,66 @@ int main(int argc, char *argv[]) {
                     allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds,
                     allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds / 60.0);
         }
+        
+        // その他の全網羅経路を黄色で追加（routeType=3）
+        int yellowCount = 0;
+        for (int i = 0; i < allEnumRouteCount; i++) {
+            if (i == bestEnumRouteIdx) continue;  // 最短経路は既に追加済み
+            
+            RouteResult *r = &allEnumRoutes[i];
+            
+            // 基準時刻1/2と重複していない経路のみを追加
+            bool isBaseTime1 = false;
+            bool isBaseTime2 = false;
+            
+            if (r->edgeCount == baseTime1Route.edgeCount) {
+                bool same = true;
+                for (int j = 0; j < r->edgeCount; j++) {
+                    if (r->edges[j] != baseTime1Route.edges[j]) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) isBaseTime1 = true;
+            }
+            
+            if (hasBaseTime2Route && r->edgeCount == baseTime2Route.edgeCount) {
+                bool same = true;
+                for (int j = 0; j < r->edgeCount; j++) {
+                    if (r->edges[j] != baseTime2Route.edges[j]) {
+                        same = false;
+                        break;
+                    }
+                }
+                if (same) isBaseTime2 = true;
+            }
+            
+            if (!isBaseTime1 && !isBaseTime2 && routeCount < MAX_SIGNALS * 4 + 20) {
+                // サイクルベースの厳密な待ち時間計算で再計算
+                double dist, timeSec, waitTimeSec;
+                calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
+                r->totalDistance = dist;
+                r->totalTimeSeconds = timeSec;
+                r->routeType = 3;  // 黄色（全網羅経路）
+                routes[routeCount++] = *r;
+                yellowCount++;
+            }
+        }
+        fprintf(stderr, "全網羅経路（黄色）: %d本追加\n", yellowCount);
     }
     
     fprintf(stderr, "\n最終出力: %d本の経路\n", routeCount);
-    int greenCount = 0, blueCount = 0, redCount = 0;
+    int greenCount = 0, blueCount = 0, redCount = 0, yellowCount = 0;
     for (int i = 0; i < routeCount; i++) {
         if (routes[i].routeType == 0) blueCount++;
         else if (routes[i].routeType == 1) greenCount++;
         else if (routes[i].routeType == 2) redCount++;
+        else if (routes[i].routeType == 3) yellowCount++;
     }
     fprintf(stderr, "- 青（基準時刻2）: %d本\n", blueCount);
     fprintf(stderr, "- 緑（基準時刻1）: %d本\n", greenCount);
     fprintf(stderr, "- 赤（最短全網羅）: %d本\n", redCount);
+    fprintf(stderr, "- 黄（全網羅経路）: %d本\n", yellowCount);
     
     printJSON(routes, routeCount);
 
