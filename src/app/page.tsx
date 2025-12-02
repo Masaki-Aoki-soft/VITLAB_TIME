@@ -191,10 +191,10 @@ export default function Home() {
         // 新しいロジックに基づく分類：
         // routeType=0（青）: 基準時刻2（基準時刻1 >= 基準時刻2の場合のみ表示）
         // routeType=1（緑）: 基準時刻1
-        // routeType=2（赤）: 全網羅経路
+        // routeType=2（赤）: 最短全網羅経路（信号待ち時間を含めた総時間が最短、1本のみ）
         let baseTime1Route: RouteResult | null = null;  // 基準時刻1（緑）- routeType=1
         let baseTime2Route: RouteResult | null = null;  // 基準時刻2（青）- routeType=0
-        const allEnumRoutes: RouteResult[] = [];  // 全網羅経路（赤）- routeType=2
+        let bestEnumRoute: RouteResult | null = null;  // 最短全網羅経路（赤）- routeType=2
         
         // 重複する経路を除外
         const seenRoutes = new Set<string>();
@@ -218,9 +218,11 @@ export default function Home() {
                 if (!baseTime1Route) {
                     baseTime1Route = route;
                 }
-            } else {
-                // 全網羅経路（赤）
-                allEnumRoutes.push(route);
+            } else if (routeType === 2) {
+                // 最短全網羅経路（赤）- 最初の1本のみ
+                if (!bestEnumRoute) {
+                    bestEnumRoute = route;
+                }
             }
         }
         
@@ -293,10 +295,10 @@ export default function Home() {
             }
         }
         
-        // 全網羅経路（赤）を描画
+        // 最短全網羅経路（赤）を描画（1本のみ）
         const redColor = '#ff4757';
-        for (const route of allEnumRoutes) {
-            const segments = route.userPref.split('\n').filter((line) => line.trim() !== '');
+        if (bestEnumRoute) {
+            const segments = bestEnumRoute.userPref.split('\n').filter((line) => line.trim() !== '');
             for (const filename of segments) {
                 try {
                     const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
@@ -307,8 +309,8 @@ export default function Home() {
                         data,
                         style: {
                             color: redColor,
-                            weight: 5,
-                            opacity: 0.6,
+                            weight: 8,
+                            opacity: 0.8,
                         },
                     });
                 } catch (err) {
@@ -335,9 +337,11 @@ export default function Home() {
             new Promise<string>(async (resolve, reject) => {
                 try {
                     const route = foundRoutes[nextIndex];
-                    const routeType = route.routeType ?? 2;  // デフォルトは全網羅
-                    // routeType=0（基準時刻2）は青、routeType=1（基準時刻1）は緑、routeType=2（全網羅）は赤
-                    const color = routeType === 0 ? '#3742fa' : (routeType === 1 ? '#2ed573' : '#ff4757');
+                    const routeType = route.routeType ?? 2;  // デフォルトは最短全網羅
+                    // routeType=0（基準時刻2）は青、routeType=1（基準時刻1）は緑、routeType=2（最短全網羅）は赤
+                    const color = routeType === 0 ? '#3742fa' 
+                        : (routeType === 1 ? '#2ed573' 
+                        : '#ff4757');
                     const weight = 8;
 
                     const segments = route.userPref

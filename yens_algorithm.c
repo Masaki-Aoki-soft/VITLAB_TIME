@@ -1174,14 +1174,20 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
 // 組み合わせを生成して経路を探索する再帰関数
 void generateCombinations(int startNode, int endNode, int *signalIndices, int signalCount,
                           int *current, int currentSize, int maxSize, int startIdx,
-                          RouteResult *outRoutes, int *outCount, int maxRoutes) {
+                          RouteResult *outRoutes, int *outCount, int maxRoutes, int *calculatedCount) {
     if (*outCount >= maxRoutes) return;
     
     if (currentSize == maxSize) {
         RouteResult r;
+        (*calculatedCount)++;  // 試行回数をカウント
         if (findRouteThroughSignals(startNode, endNode, current, currentSize, &r)) {
             r.routeType = 2;  // 赤
             outRoutes[*outCount] = r;
+            // 最初の5件と最後の5件、および10件ごとにログ出力
+            if (*outCount < 5 || (*outCount >= (*outCount / 10) * 10 && *outCount < (*outCount / 10) * 10 + 5) || *outCount >= maxRoutes - 5) {
+                fprintf(stderr, "  経路[%d]: totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間)\n", 
+                        *outCount, r.totalTimeSeconds);
+            }
             (*outCount)++;
         }
         return;
@@ -1191,13 +1197,14 @@ void generateCombinations(int startNode, int endNode, int *signalIndices, int si
         current[currentSize] = signalIndices[i];
         generateCombinations(startNode, endNode, signalIndices, signalCount,
                             current, currentSize + 1, maxSize, i + 1,
-                            outRoutes, outCount, maxRoutes);
+                            outRoutes, outCount, maxRoutes, calculatedCount);
     }
 }
 
 // 全網羅経路を計算する関数（12個の信号から1個、2個、3個の組み合わせを全て探索）
 int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteResult *outRoutes, int maxRoutes) {
     int count = 0;
+    int calculatedCount = 0;  // 実際に計算した経路数
     
     // 指定された12個の信号エッジのインデックスを取得
     int targetSignalIndices[12];
@@ -1219,26 +1226,40 @@ int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteRes
     for (int i = 0; i < targetSignalCount && count < maxRoutes; i++) {
         current[0] = targetSignalIndices[i];
         RouteResult r;
+        calculatedCount++;  // 試行回数をカウント（経路探索を試みた回数）
+        // findRouteThroughSignals内でcalcRouteMetricsWithWaitTime(..., true)が呼ばれるため、
+        // 移動時間+信号待ち時間が計算される
         if (findRouteThroughSignals(startNode, endNode, current, 1, &r)) {
             r.routeType = 2;  // 赤
             outRoutes[count++] = r;
+            // 各経路について、移動時間+信号待ち時間が計算されていることを確認
+            fprintf(stderr, "  経路[%d]: totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間が計算済み)\n", 
+                    count - 1, r.totalTimeSeconds);
         }
     }
-    fprintf(stderr, "1個の信号を通る経路: %d本生成\n", count);
+    fprintf(stderr, "1個の信号を通る経路: %d本生成 (試行: %d回、全試行で移動時間+信号待ち時間を計算)\n", count, calculatedCount);
     
     // 2個の組み合わせ
     fprintf(stderr, "2個の信号を通る経路を探索中...\n");
     int countBefore2 = count;
+    int calculatedBefore2 = calculatedCount;
     generateCombinations(startNode, endNode, targetSignalIndices, targetSignalCount,
-                        current, 0, 2, 0, outRoutes, &count, maxRoutes);
-    fprintf(stderr, "2個の信号を通る経路: %d本生成\n", count - countBefore2);
+                        current, 0, 2, 0, outRoutes, &count, maxRoutes, &calculatedCount);
+    fprintf(stderr, "2個の信号を通る経路: %d本生成 (試行: %d回)\n", 
+            count - countBefore2, calculatedCount - calculatedBefore2);
     
     // 3個の組み合わせ
     fprintf(stderr, "3個の信号を通る経路を探索中...\n");
     int countBefore3 = count;
+    int calculatedBefore3 = calculatedCount;
     generateCombinations(startNode, endNode, targetSignalIndices, targetSignalCount,
-                        current, 0, 3, 0, outRoutes, &count, maxRoutes);
-    fprintf(stderr, "3個の信号を通る経路: %d本生成\n", count - countBefore3);
+                        current, 0, 3, 0, outRoutes, &count, maxRoutes, &calculatedCount);
+    fprintf(stderr, "3個の信号を通る経路: %d本生成 (試行: %d回)\n", 
+            count - countBefore3, calculatedCount - calculatedBefore3);
+    
+    fprintf(stderr, "全網羅経路計算完了: 合計%d本生成 (総試行回数: %d回)\n", count, calculatedCount);
+    fprintf(stderr, "注意: 全%d本の経路について、findRouteThroughSignals内で移動時間+信号待ち時間が計算されています\n", count);
+    fprintf(stderr, "最短経路を選ぶ際、全%d本のtotalTimeSecondsを比較します\n", count);
     
     return count;
 }
@@ -1280,7 +1301,7 @@ void printJSON(const RouteResult *routes, int routeCount) {
         // 待ち時間を計算（信号エッジの期待待ち時間の合計）
         double totalWaitTime = 0.0;
         if (r->routeType == 2) {
-            // 全網羅経路の場合、期待待ち時間を計算
+            // 最短全網羅経路（赤）の場合、期待待ち時間を計算
             for (int j = 0; j < r->edgeCount; j++) {
                 int idx = r->edges[j];
                 if (idx >= 0 && idx < edgeDataCount) {
@@ -1405,9 +1426,16 @@ int main(int argc, char *argv[]) {
             routes[routeCount++] = baseTime2Route;
         }
         
-        // 全網羅経路を赤で追加（基準時刻2と重複するものは除外）
+        // 全網羅経路の中で、実際の信号待ち時間を含めた総時間が最短の経路を見つける（赤色で表示）
+        fprintf(stderr, "\n=== 全%d本の経路から最短経路を選出（全経路のtotalTimeSecondsを比較） ===\n", allEnumRouteCount);
+        int bestEnumRouteIdx = -1;
+        double bestEnumRouteTime = INF;
+        int checkedCount = 0;  // 実際にチェックした経路数
+        
         for (int i = 0; i < allEnumRouteCount; i++) {
             RouteResult *r = &allEnumRoutes[i];
+            
+            // 基準時刻2と重複していない経路のみを対象とする
             bool isBaseTime2 = false;
             
             if (hasBaseTime2Route && r->edgeCount == baseTime2Route.edgeCount) {
@@ -1421,10 +1449,58 @@ int main(int argc, char *argv[]) {
                 if (same) isBaseTime2 = true;
             }
             
+            // 重複していない経路で、総時間が最短のものを探す
+            // 注意: r->totalTimeSecondsは既にfindRouteThroughSignals内で
+            // calcRouteMetricsWithWaitTime(..., true)により移動時間+信号待ち時間が計算されている
             if (!isBaseTime2) {
-                r->routeType = 2;  // 赤
-                routes[routeCount++] = *r;
+                checkedCount++;
+                // 最初の5件、最後の5件、最短経路候補が更新された時のみログ出力
+                if (i < 5 || i >= allEnumRouteCount - 5 || r->totalTimeSeconds < bestEnumRouteTime) {
+                    // 検証のため再計算
+                    double waitTimeSeconds = 0.0;
+                    double moveTimeSeconds = 0.0;
+                    for (int j = 0; j < r->edgeCount; j++) {
+                        int idx = r->edges[j];
+                        if (idx >= 0 && idx < edgeDataCount) {
+                            EdgeData *e = &edgeDataArray[idx];
+                            double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
+                            if (adjustedSpeed > 0.0) {
+                                moveTimeSeconds += (e->distance / adjustedSpeed) * 60.0;  // 秒
+                            }
+                            if (e->isSignal) {
+                                waitTimeSeconds += e->signalExpected * 60.0;  // 秒
+                            }
+                        }
+                    }
+                    if (i < 5) {
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
+                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
+                    } else if (i >= allEnumRouteCount - 5) {
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
+                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
+                    } else if (r->totalTimeSeconds < bestEnumRouteTime) {
+                        fprintf(stderr, "  経路[%d]: 新たな最短候補! totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間) ✓\n",
+                                i, r->totalTimeSeconds);
+                    }
+                }
+                
+                if (r->totalTimeSeconds < bestEnumRouteTime) {
+                    bestEnumRouteTime = r->totalTimeSeconds;
+                    bestEnumRouteIdx = i;
+                }
             }
+        }
+        fprintf(stderr, "全%d本の経路をチェックしました（重複除外後: %d本）\n", allEnumRouteCount, checkedCount);
+        
+        // 最短の全網羅経路のみを赤色で追加（1本のみ）
+        if (bestEnumRouteIdx >= 0) {
+            allEnumRoutes[bestEnumRouteIdx].routeType = 2;  // 赤
+            routes[routeCount++] = allEnumRoutes[bestEnumRouteIdx];
+            fprintf(stderr, "最短全網羅経路（赤）: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min)\n",
+                    allEnumRoutes[bestEnumRouteIdx].edgeCount,
+                    allEnumRoutes[bestEnumRouteIdx].totalDistance,
+                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds,
+                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds / 60.0);
         }
     }
     // 基準時刻1 < 基準時刻2 の場合
@@ -1445,7 +1521,7 @@ int main(int argc, char *argv[]) {
         fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
         
         fprintf(stderr, "\n=== 表示条件に基づいて経路を分類 ===\n");
-        fprintf(stderr, "基準時刻1 >= 基準時刻2: 基準時刻1を緑、基準時刻2を青、全網羅を赤で表示\n");
+        fprintf(stderr, "基準時刻1 >= 基準時刻2: 基準時刻1を緑、基準時刻2を青、最短全網羅を赤で表示\n");
         
         // 基準時刻1を緑で追加
         baseTime1Route.routeType = 1;  // 緑
@@ -1457,9 +1533,16 @@ int main(int argc, char *argv[]) {
             routes[routeCount++] = baseTime2Route;
         }
         
-        // 全網羅経路を赤で追加（基準時刻1/2と重複するものは除外）
+        // 全網羅経路の中で、実際の信号待ち時間を含めた総時間が最短の経路を見つける（赤色で表示）
+        fprintf(stderr, "\n=== 全%d本の経路から最短経路を選出（全経路のtotalTimeSecondsを比較） ===\n", allEnumRouteCount);
+        int bestEnumRouteIdx = -1;
+        double bestEnumRouteTime = INF;
+        int checkedCount = 0;  // 実際にチェックした経路数
+        
         for (int i = 0; i < allEnumRouteCount; i++) {
             RouteResult *r = &allEnumRoutes[i];
+            
+            // 基準時刻1/2と重複していない経路のみを対象とする
             bool isBaseTime1 = false;
             bool isBaseTime2 = false;
             
@@ -1485,10 +1568,58 @@ int main(int argc, char *argv[]) {
                 if (same) isBaseTime2 = true;
             }
             
+            // 重複していない経路で、総時間が最短のものを探す
+            // 注意: r->totalTimeSecondsは既にfindRouteThroughSignals内で
+            // calcRouteMetricsWithWaitTime(..., true)により移動時間+信号待ち時間が計算されている
             if (!isBaseTime1 && !isBaseTime2) {
-                r->routeType = 2;  // 赤
-                routes[routeCount++] = *r;
+                checkedCount++;
+                // 最初の5件、最後の5件、最短経路候補が更新された時のみログ出力
+                if (i < 5 || i >= allEnumRouteCount - 5 || r->totalTimeSeconds < bestEnumRouteTime) {
+                    // 検証のため再計算
+                    double waitTimeSeconds = 0.0;
+                    double moveTimeSeconds = 0.0;
+                    for (int j = 0; j < r->edgeCount; j++) {
+                        int idx = r->edges[j];
+                        if (idx >= 0 && idx < edgeDataCount) {
+                            EdgeData *e = &edgeDataArray[idx];
+                            double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
+                            if (adjustedSpeed > 0.0) {
+                                moveTimeSeconds += (e->distance / adjustedSpeed) * 60.0;  // 秒
+                            }
+                            if (e->isSignal) {
+                                waitTimeSeconds += e->signalExpected * 60.0;  // 秒
+                            }
+                        }
+                    }
+                    if (i < 5) {
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
+                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
+                    } else if (i >= allEnumRouteCount - 5) {
+                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, 信号待ち時間=%.2f秒, 合計=%.2f秒 (totalTimeSeconds=%.2f秒) ✓\n",
+                                i, moveTimeSeconds, waitTimeSeconds, moveTimeSeconds + waitTimeSeconds, r->totalTimeSeconds);
+                    } else if (r->totalTimeSeconds < bestEnumRouteTime) {
+                        fprintf(stderr, "  経路[%d]: 新たな最短候補! totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間) ✓\n",
+                                i, r->totalTimeSeconds);
+                    }
+                }
+                
+                if (r->totalTimeSeconds < bestEnumRouteTime) {
+                    bestEnumRouteTime = r->totalTimeSeconds;
+                    bestEnumRouteIdx = i;
+                }
             }
+        }
+        fprintf(stderr, "全%d本の経路をチェックしました（重複除外後: %d本）\n", allEnumRouteCount, checkedCount);
+        
+        // 最短の全網羅経路のみを赤色で追加（1本のみ）
+        if (bestEnumRouteIdx >= 0) {
+            allEnumRoutes[bestEnumRouteIdx].routeType = 2;  // 赤
+            routes[routeCount++] = allEnumRoutes[bestEnumRouteIdx];
+            fprintf(stderr, "最短全網羅経路（赤）: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min)\n",
+                    allEnumRoutes[bestEnumRouteIdx].edgeCount,
+                    allEnumRoutes[bestEnumRouteIdx].totalDistance,
+                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds,
+                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds / 60.0);
         }
     }
     
@@ -1501,7 +1632,7 @@ int main(int argc, char *argv[]) {
     }
     fprintf(stderr, "- 青（基準時刻2）: %d本\n", blueCount);
     fprintf(stderr, "- 緑（基準時刻1）: %d本\n", greenCount);
-    fprintf(stderr, "- 赤（全網羅）: %d本\n", redCount);
+    fprintf(stderr, "- 赤（最短全網羅）: %d本\n", redCount);
     
     printJSON(routes, routeCount);
 
