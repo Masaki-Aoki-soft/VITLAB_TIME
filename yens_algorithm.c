@@ -175,24 +175,20 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
 // 基準時刻2を計算する関数（信号を通る最短経路、待ち時間0、方角制約なし）
 bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute);
 
-// 全網羅経路を計算する関数（12個の信号から1個、2個、3個の組み合わせを全て探索）
+// 全網羅経路を計算する関数（指定された信号から1個、2個、3個の組み合わせを全て探索）
 int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteResult *outRoutes, int maxRoutes);
 
 /* ---------- ダイクストラ（信号制限なし・待ち時間なし） ---------- */
 
-// 指定された信号エッジを避ける方角制約付きダイクストラ
+// 指定された信号エッジを避けるダイクストラ（方角制約なし）
 DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBearing, int *avoidEdgeIndices, int avoidCount) {
     double dist[MAX_NODES];
     int    prev[MAX_NODES];
     bool   used[MAX_NODES];
-    // 方角制約を使用するかどうか：ノード位置情報が読み込まれていて、targetBearingが有効な場合
-    bool   useAngleConstraint = (nodePositions[start].lat != 0.0 && nodePositions[goal].lat != 0.0);
+    // 方角制約を使用するかどうか：常にfalse（方角制約を無効化）
+    bool   useAngleConstraint = false;
     
-    if (useAngleConstraint) {
-        fprintf(stderr, "方角制約を使用: ターゲット方角=%.2f度, ±60度範囲\n", targetBearing);
-    } else {
-        fprintf(stderr, "方角制約を使用しない（ノード位置情報が不足）\n");
-    }
+    fprintf(stderr, "方角制約を使用しない（方角制約を無効化）\n");
     
     // 避けるべきエッジのセットを作成
     bool avoidEdgeSet[MAX_EDGES];
@@ -236,8 +232,6 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
             int v       = graph[u].edges[i].node;
             int edgeIdx = graph[u].edges[i].edgeIndex;
             if (used[v]) continue;
-            
-            EdgeData *e = &edgeDataArray[edgeIdx];
             
             // 指定された信号エッジのみを避ける（他の信号は通ってもよい）
             if (avoidEdgeSet[edgeIdx]) {
@@ -321,12 +315,13 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
     return res;
 }
 
-// 方角制約付きダイクストラ（信号エッジを除外、方角±60度以内）
+// ダイクストラ（信号エッジを除外、方角制約なし）
 DijkstraResult dijkstraWithAngleConstraint(int start, int goal, double targetBearing, bool avoidSignals) {
     double dist[MAX_NODES];
     int    prev[MAX_NODES];
     bool   used[MAX_NODES];
-    bool   useAngleConstraint = (targetBearing != 0.0 || nodePositions[start].lat != 0.0);
+    // 方角制約を無効化
+    bool   useAngleConstraint = false;
 
     for (int i = 0; i < MAX_NODES; i++) {
         dist[i] = INF;
@@ -527,7 +522,6 @@ DijkstraResult dijkstra(int start, int goal) {
 
         for (int i = 0; i < graph[u].edge_count; i++) {
             int v       = graph[u].edges[i].node;
-            int edgeIdx = graph[u].edges[i].edgeIndex;
             if (used[v]) continue;
 
             double t = getEdgeTimeSeconds(u, v);
@@ -646,10 +640,9 @@ void calcRouteMetricsWithCycleBasedWaitTime(const int *edgeIdxs, int edgeCount,
         EdgeData *e = &edgeDataArray[idx];
         totalDist += e->distance;
         
-        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
-        if (adjustedSpeed <= 0.0) continue;
-        double timeMinutes = e->distance / adjustedSpeed;
-        double travelTimeSeconds = timeMinutes * 60.0;  // 秒
+        // getEdgeTimeSecondsを使用して危険な経路のペナルティを適用
+        double travelTimeSeconds = getEdgeTimeSeconds(e->from, e->to);
+        if (travelTimeSeconds >= INF) continue;
         totalTime += travelTimeSeconds;
         cumulativeTime += travelTimeSeconds;
         
@@ -710,10 +703,10 @@ void calcRouteMetricsWithWaitTimeAndBaseTime1(const int *edgeIdxs, int edgeCount
         EdgeData *e = &edgeDataArray[idx];
         totalDist += e->distance;
 
-        double adjustedSpeed = walkingSpeed * (1.0 - K_GRADIENT * e->gradient);
-        if (adjustedSpeed <= 0.0) continue;
-        double timeMinutes = e->distance / adjustedSpeed;
-        totalTime += timeMinutes * 60.0;  // 秒
+        // getEdgeTimeSecondsを使用して危険な経路のペナルティを適用
+        double travelTimeSeconds = getEdgeTimeSeconds(e->from, e->to);
+        if (travelTimeSeconds >= INF) continue;
+        totalTime += travelTimeSeconds;
         
         // 信号エッジの場合、待ち時間を追加
         // 基準時刻1（isBaseTime1=true）の場合は信号の待ち時間を追加しない
@@ -994,20 +987,20 @@ bool isWithinAngleRange(double angle1, double angle2, double tolerance) {
     return diff <= tolerance;
 }
 
-// 基準時刻1を計算する関数（信号を避けた最短経路、方角±60度制約あり）
-// 指定された12個の信号以外の信号を通る経路も考慮する
+// 基準時刻1を計算する関数（信号を避けた最短経路、方角制約なし）
+// 指定された信号以外の信号を通る経路も考慮する
 bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteResult *outRoute) {
-    // 指定された12個の信号エッジのインデックスを取得（これらの信号は避ける）
-    int targetSignalIndices[12];
+    // 指定された信号エッジのインデックスを取得（これらの信号は避ける）
+    int targetSignalIndices[16];
     int targetSignalCount = 0;
     getTargetSignalEdges(targetSignalIndices, &targetSignalCount);
     
-    fprintf(stderr, "基準時刻1探索: 方角±60度制約付きで信号を避けた経路を探索\n");
-    fprintf(stderr, "指定された12個の信号を避けます。他の信号を通る経路も考慮します。\n");
-    fprintf(stderr, "ターゲット方角: %.2f度, 指定信号数: %d個\n", targetBearing, targetSignalCount);
+    fprintf(stderr, "基準時刻1探索: 方角制約なしで信号を避けた経路を探索\n");
+    fprintf(stderr, "指定された信号を避けます。他の信号を通る経路も考慮します。\n");
+    fprintf(stderr, "指定信号数: %d個\n", targetSignalCount);
     
-    // 指定された12個の信号のみを避けた経路を探索（他の信号は通ってもよい）
-    // 方角±60度制約付きで探索
+    // 指定された信号のみを避けた経路を探索（他の信号は通ってもよい）
+    // 方角制約なしで探索
     DijkstraResult avoidSignalPath = dijkstraAvoidTargetSignals(startNode, endNode, targetBearing, 
                                                                  targetSignalIndices, targetSignalCount);
     
@@ -1032,11 +1025,9 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
             int nf, nt;
             normalizeEdgeKey(60, 209, &nf, &nt);
             crosswalk60_209Idx = findEdgeIndex(nf, nt);
-            bool hasCrosswalk60_209 = false;
             if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
                 for (int i = 0; i < r.edgeCount; i++) {
                     if (r.edges[i] == crosswalk60_209Idx) {
-                        hasCrosswalk60_209 = true;
                         EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
                         // signalExpectedが0.0の場合は、固定値20秒を使用
                         double crosswalkWait = 0.0;
@@ -1074,7 +1065,7 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
             return true;
         }
     } else {
-        fprintf(stderr, "基準時刻1: 方角±60度制約付きで経路が見つかりませんでした。方角制約なしで再探索します。\n");
+        fprintf(stderr, "基準時刻1: 経路が見つかりませんでした。再探索します。\n");
         
         // 方角制約なしで信号を避けた最短経路を探索（フォールバック）
         DijkstraResult fallbackPath = dijkstra(startNode, endNode);
@@ -1126,11 +1117,9 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
                 int nf, nt;
                 normalizeEdgeKey(60, 209, &nf, &nt);
                 crosswalk60_209Idx = findEdgeIndex(nf, nt);
-                bool hasCrosswalk60_209 = false;
                 if (crosswalk60_209Idx >= 0 && crosswalk60_209Idx < edgeDataCount) {
                     for (int i = 0; i < r.edgeCount; i++) {
                         if (r.edges[i] == crosswalk60_209Idx) {
-                            hasCrosswalk60_209 = true;
                             EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
                             // signalExpectedが0.0の場合は、固定値20秒を使用
                             double crosswalkWait = 0.0;
@@ -1304,18 +1293,19 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
     return found;
 }
 
-// 指定された12個の信号エッジのインデックスを取得する関数
+// 指定された信号エッジのインデックスを取得する関数
 void getTargetSignalEdges(int *targetSignalIndices, int *targetCount) {
-    // 指定された12個の信号経路
-    int targetSignals[12][2] = {
+    // 指定された信号経路（16個）
+    int targetSignals[16][2] = {
         {66, 211}, {211, 212}, {210, 212}, {66, 210},
         {25, 196}, {196, 197}, {195, 197}, {25, 195},
-        {26, 199}, {199, 200}, {26, 198}, {198, 200}
+        {26, 199}, {199, 200}, {26, 198}, {198, 200},
+        {17, 189}, {17, 190}, {189, 190}, {190, 191}
     };
     
     *targetCount = 0;
     
-    for (int i = 0; i < 12; i++) {
+    for (int i = 0; i < 16; i++) {
         int from = targetSignals[i][0];
         int to = targetSignals[i][1];
         
@@ -1489,13 +1479,13 @@ void generateCombinations(int startNode, int endNode, int *signalIndices, int si
     }
 }
 
-// 全網羅経路を計算する関数（12個の信号から1個、2個、3個の組み合わせを全て探索）
+// 全網羅経路を計算する関数（指定された信号から1個、2個、3個の組み合わせを全て探索）
 int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteResult *outRoutes, int maxRoutes) {
     int count = 0;
     int calculatedCount = 0;  // 実際に計算した経路数
     
-    // 指定された12個の信号エッジのインデックスを取得
-    int targetSignalIndices[12];
+    // 指定された信号エッジのインデックスを取得
+    int targetSignalIndices[16];
     int targetSignalCount = 0;
     getTargetSignalEdges(targetSignalIndices, &targetSignalCount);
     
@@ -1620,7 +1610,6 @@ void printJSON(const RouteResult *routes, int routeCount) {
                     }
                 }
             }
-            double signalWaitTimeOnly = waitTimeSec - crosswalkWaitTime;
             totalWaitTime = crosswalkWaitTime / 60.0;  // 60-209横断歩道の待ち時間のみ（秒を分に変換）
         }
         printf("    \"totalWaitTime\": %.2f,\n", totalWaitTime);
@@ -1667,25 +1656,25 @@ int main(int argc, char *argv[]) {
     RouteResult routes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を含むため余裕を持たせる
     int routeCount = 0;
     
-    RouteResult baseTime1Route;  // 基準時刻1（信号を避けた最短経路、方角±60度制約あり）
+    RouteResult baseTime1Route;  // 基準時刻1（信号を避けた最短経路、方角制約なし）
     RouteResult baseTime2Route;  // 基準時刻2（信号を通る最短経路、待ち時間0、方角制約なし）
     bool hasBaseTime1Route = false;
     bool hasBaseTime2Route = false;
     
-    // スタートからゴールの方角を計算（基準時刻1用のみ）
+    // スタートからゴールの方角を計算（現在は使用していない）
     double targetBearing = 0.0;
     if (nodePositions[startNode].lat != 0.0 && nodePositions[endNode].lat != 0.0) {
         targetBearing = calculateBearing(
             nodePositions[startNode].lat, nodePositions[startNode].lon,
             nodePositions[endNode].lat, nodePositions[endNode].lon
         );
-        fprintf(stderr, "スタート→ゴールの方角: %.2f度（基準時刻1の探索に使用）\n", targetBearing);
+        fprintf(stderr, "スタート→ゴールの方角: %.2f度（参考情報、方角制約は使用していません）\n", targetBearing);
     } else {
-        fprintf(stderr, "Warning: ノード位置情報が読み込まれていません。方角制約なしで探索します。\n");
+        fprintf(stderr, "Warning: ノード位置情報が読み込まれていません。\n");
     }
     
-    // ========== 第一段階：基準時刻1（信号を避けた最短経路、方角±60度制約あり） ==========
-    fprintf(stderr, "\n=== 第一段階：基準時刻1（信号を避けた最短経路、方角±60度制約あり）を計算 ===\n");
+    // ========== 第一段階：基準時刻1（信号を避けた最短経路、方角制約なし） ==========
+    fprintf(stderr, "\n=== 第一段階：基準時刻1（信号を避けた最短経路、方角制約なし）を計算 ===\n");
     hasBaseTime1Route = calculateBaseTime1(startNode, endNode, targetBearing, &baseTime1Route);
     if (hasBaseTime1Route) {
         fprintf(stderr,
