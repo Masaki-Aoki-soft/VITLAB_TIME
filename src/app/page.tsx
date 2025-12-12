@@ -53,16 +53,27 @@ export default function Home() {
     });
 
     const mapRef = useRef<any>(null);
-    const [routeLayers, setRouteLayers] = useState<Array<{ data: any; style: any }>>([]);
+    const [routeLayers, setRouteLayers] = useState<Array<{ data: any; style: any; routeInfo?: RouteResult }>>([]);
     const [dataLayers, setDataLayers] = useState<
         Array<{ data: any; style: any; popup?: string; edgeName?: string }>
     >([]);
+    const [selectedRouteInfo, setSelectedRouteInfo] = useState<RouteResult | null>(null);
     const [startMarker, setStartMarker] = useState<{
         position: [number, number];
         nodeId: string;
         startNode: string;
         endNode: string;
     } | null>(null);
+    const [endMarker, setEndMarker] = useState<{
+        position: [number, number];
+        nodeId: string;
+    } | null>(null);
+    const [showIntersectionPins, setShowIntersectionPins] = useState(false);
+    const [intersectionPins, setIntersectionPins] = useState<Array<{
+        position: [number, number];
+        nodeId: string;
+    }>>([]);
+    const [pinSelectionState, setPinSelectionState] = useState<'none' | 'start' | 'end'>('none');
     const geojsonFeaturesRef = useRef<any[]>([]);
     const geojsonFileNamesRef = useRef<Array<string>>([]);
     const otherLayersRef = useRef<any[]>([]);
@@ -272,7 +283,7 @@ export default function Home() {
         }
 
         // 経路を描画（react-leaflet用にstateに追加）
-        const newLayers: Array<{ data: any; style: any }> = [];
+        const newLayers: Array<{ data: any; style: any; routeInfo?: RouteResult }> = [];
 
         // 基準時刻1（緑）の経路を描画（1本のみ）
         const greenColor = '#2ed573';
@@ -293,6 +304,7 @@ export default function Home() {
                             weight: 8,
                             opacity: 0.8,
                         },
+                        routeInfo: baseTime1Route,
                     });
                 } catch (err) {
                     console.warn(`Error loading ${filename}:`, err);
@@ -319,6 +331,7 @@ export default function Home() {
                             weight: 8,
                             opacity: 0.8,
                         },
+                        routeInfo: baseTime2Route,
                     });
                 } catch (err) {
                     console.warn(`Error loading ${filename}:`, err);
@@ -345,6 +358,7 @@ export default function Home() {
                             weight: 8,
                             opacity: 0.8,
                         },
+                        routeInfo: bestEnumRoute,
                     });
                 } catch (err) {
                     console.warn(`Error loading ${filename}:`, err);
@@ -379,7 +393,7 @@ export default function Home() {
                     const yellowColor = '#ffd700'; // 黄色
                     const weight = 6;
 
-                    const newLayers: Array<{ data: any; style: any }> = [];
+                    const newLayers: Array<{ data: any; style: any; routeInfo?: RouteResult }> = [];
 
                     // 既存の経路レイヤーを保持（青・緑・赤）
                     const existingLayers = routeLayers;
@@ -404,6 +418,7 @@ export default function Home() {
                                         weight: weight,
                                         opacity: 0.7,
                                     },
+                                    routeInfo: route,
                                 });
                             } catch (err) {
                                 console.warn(`Error loading ${filename}:`, err);
@@ -570,6 +585,8 @@ export default function Home() {
         setRouteLayers([]);
         setDataLayers([]);
         setStartMarker(null);
+        setEndMarker(null);
+        setSelectedRouteInfo(null);
         otherLayersRef.current.forEach((layer) => {
             if (mapRef.current) {
                 mapRef.current.removeLayer(layer);
@@ -595,55 +612,66 @@ export default function Home() {
         }
     }, [params.param1, params.param2]);
 
-    // マップクリック時の処理
-    const handleMapClick = async (lat: number, lng: number) => {
-        if (geojsonFeaturesRef.current.length === 0) {
-            alert('GeoJSONデータがまだ読み込まれていません。');
-            return;
-        }
-
-        // @turf/turfを動的にインポート
-        const turfModule = await import('@turf/turf');
-        const turf = turfModule;
-
-        const clickedPoint = turf.point([lng, lat]);
-        let nearestPoint: any = null;
-        let nearestFileIndex: number = -1;
-        let minDistance = Infinity;
-
-        geojsonFeaturesRef.current.forEach((feature, index) => {
-            const currentPoint = turf.point(feature.geometry.coordinates);
-            const distance = turf.distance(clickedPoint, currentPoint, {
-                units: 'kilometers',
+    // ピンを配置するボタンの処理
+    const handleShowPins = () => {
+        if (showIntersectionPins) {
+            // ピンを非表示
+            setShowIntersectionPins(false);
+            setIntersectionPins([]);
+            setPinSelectionState('none');
+        } else {
+            // 全ての交差点のピンを表示
+            const pins: Array<{ position: [number, number]; nodeId: string }> = [];
+            geojsonFeaturesRef.current.forEach((feature, index) => {
+                if (index < geojsonFileNamesRef.current.length) {
+                    const fileName = geojsonFileNamesRef.current[index];
+                    if (fileName) {
+                        const nodeId = fileName.replace('.geojson', '');
+                        pins.push({
+                            position: [
+                                feature.geometry.coordinates[1],
+                                feature.geometry.coordinates[0],
+                            ],
+                            nodeId: nodeId,
+                        });
+                    }
+                }
             });
-            if (distance < minDistance) {
-                minDistance = distance;
-                nearestPoint = feature;
-                nearestFileIndex = index;
-            }
-        });
-
-        if (
-            nearestPoint &&
-            nearestFileIndex >= 0 &&
-            nearestFileIndex < geojsonFileNamesRef.current.length
-        ) {
-            const fileName = geojsonFileNamesRef.current[nearestFileIndex];
-            if (fileName) {
-                const nodeId = fileName.replace('.geojson', '');
-                const newParams = { ...params, param1: nodeId };
-                setStartMarker({
-                    position: [
-                        nearestPoint.geometry.coordinates[1],
-                        nearestPoint.geometry.coordinates[0],
-                    ],
-                    nodeId: nodeId,
-                    startNode: nodeId,
-                    endNode: newParams.param2,
-                });
-                setParams(newParams);
-            }
+            setIntersectionPins(pins);
+            setShowIntersectionPins(true);
+            setPinSelectionState('start');
         }
+    };
+
+    // 交差点ピンをクリックしたときの処理
+    const handleIntersectionPinClick = (nodeId: string, position: [number, number]) => {
+        if (pinSelectionState === 'start') {
+            // 始点を設定
+            setParams({ ...params, param1: nodeId });
+            setStartMarker({
+                position: position,
+                nodeId: nodeId,
+                startNode: nodeId,
+                endNode: params.param2,
+            });
+            setPinSelectionState('end');
+        } else if (pinSelectionState === 'end') {
+            // 終点を設定
+            setParams({ ...params, param2: nodeId });
+            setEndMarker({
+                position: position,
+                nodeId: nodeId,
+            });
+            // 全てのピンを非表示
+            setShowIntersectionPins(false);
+            setIntersectionPins([]);
+            setPinSelectionState('none');
+        }
+    };
+
+    // マップクリック時の処理（廃止 - 何もしない）
+    const handleMapClick = async (lat: number, lng: number) => {
+        // 機能を廃止 - 何もしない
     };
 
     // 初期化
@@ -802,38 +830,58 @@ export default function Home() {
                                     <i className="fas fa-map-marker-alt text-yellow-300"></i>
                                     地点設定
                                 </h3>
-                                <div className="space-x-2 flex">
-                                    <div>
-                                        <label className="block text-white/90 text-sm font-medium mb-2">
-                                            <i className="fas fa-play text-green-400 mr-1"></i>
-                                            始点 (1-246)
-                                        </label>
-                                        <input
-                                            type="text"
-                                            value={params.param1}
-                                            onChange={(e) =>
-                                                setParams({ ...params, param1: e.target.value })
-                                            }
-                                            disabled={isLoading}
-                                            className="w-full pl-2 rounded-lg bg-white/20 text-white border border-white/30 placeholder-white/50 focus:border-yellow-300 focus:outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                            placeholder="始点ノード番号"
-                                        />
-                                    </div>
-                                    <div>
-                                        <label className="block text-white/90 text-sm font-medium mb-2">
-                                            <i className="fas fa-stop text-red-400 mr-1"></i> 終点
-                                            (1-246)
-                                        </label>
-                                        <input
-                                            type="text"
-                                            value={params.param2}
-                                            onChange={(e) =>
-                                                setParams({ ...params, param2: e.target.value })
-                                            }
-                                            disabled={isLoading}
-                                            className="w-full pl-2 rounded-lg bg-white/20 text-white border border-white/30 placeholder-white/50 focus:border-yellow-300 focus:outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
-                                            placeholder="終点ノード番号"
-                                        />
+                                <div className="space-y-3">
+                                    <button
+                                        onClick={handleShowPins}
+                                        disabled={isLoading}
+                                        className={`w-full py-2 px-4 rounded-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed ${
+                                            showIntersectionPins
+                                                ? 'bg-red-500 hover:bg-red-600 text-white'
+                                                : 'bg-blue-500 hover:bg-blue-600 text-white'
+                                        }`}
+                                    >
+                                        <i className="fas fa-map-pin"></i>
+                                        {showIntersectionPins ? 'ピンを非表示' : 'ピンを配置する'}
+                                    </button>
+                                    {showIntersectionPins && (
+                                        <div className="text-white/80 text-xs text-center">
+                                            {pinSelectionState === 'start' && '始点を選択してください'}
+                                            {pinSelectionState === 'end' && '終点を選択してください'}
+                                        </div>
+                                    )}
+                                    <div className="space-x-2 flex">
+                                        <div>
+                                            <label className="block text-white/90 text-sm font-medium mb-2">
+                                                <i className="fas fa-play text-green-400 mr-1"></i>
+                                                始点 (1-246)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={params.param1}
+                                                onChange={(e) =>
+                                                    setParams({ ...params, param1: e.target.value })
+                                                }
+                                                disabled={isLoading}
+                                                className="w-full pl-2 rounded-lg bg-white/20 text-white border border-white/30 placeholder-white/50 focus:border-yellow-300 focus:outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                placeholder="始点ノード番号"
+                                            />
+                                        </div>
+                                        <div>
+                                            <label className="block text-white/90 text-sm font-medium mb-2">
+                                                <i className="fas fa-stop text-red-400 mr-1"></i> 終点
+                                                (1-246)
+                                            </label>
+                                            <input
+                                                type="text"
+                                                value={params.param2}
+                                                onChange={(e) =>
+                                                    setParams({ ...params, param2: e.target.value })
+                                                }
+                                                disabled={isLoading}
+                                                className="w-full pl-2 rounded-lg bg-white/20 text-white border border-white/30 placeholder-white/50 focus:border-yellow-300 focus:outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                                placeholder="終点ノード番号"
+                                            />
+                                        </div>
                                     </div>
                                 </div>
                             </div>
@@ -995,7 +1043,17 @@ export default function Home() {
                                 routeLayers={routeLayers}
                                 dataLayers={dataLayers}
                                 startMarker={startMarker}
+                                endMarker={endMarker}
                                 onMapClick={handleMapClick}
+                                onRouteClick={setSelectedRouteInfo}
+                                weights={weights}
+                                onWeightChange={(weightId, value) => {
+                                    const weightKey = weightId as keyof typeof weights;
+                                    setWeights({ ...weights, [weightKey]: value });
+                                }}
+                                intersectionPins={showIntersectionPins ? intersectionPins : []}
+                                onIntersectionPinClick={handleIntersectionPinClick}
+                                pinSelectionState={pinSelectionState}
                             />
                             <div className="glass-effect rounded-xl p-4 flex flex-col">
                                 <h3 className="text-white font-semibold mb-3 flex items-center gap-2">

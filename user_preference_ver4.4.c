@@ -12,7 +12,7 @@
 //その他0,1の値はそのまま加算する
 #define INPUT_FILE "oomiya_route_inf_4.csv"
 #define OUTPUT_FILE "result.csv"
-#define MAX_LINE_LENGTH 836 //東大宮のデータ833行+1カラム
+#define MAX_LINE_LENGTH 843 //東大宮のデータ833行+1カラム
 #define NUM_COLUMNS 16 //カラムの数、
 #define NUM_PRE 13 //ユーザの好み勾配はkの値　距離も含めて13
 #define Z_VALUE 5.0 //横断歩道の極大値

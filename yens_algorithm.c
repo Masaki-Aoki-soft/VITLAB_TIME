@@ -991,7 +991,7 @@ bool isWithinAngleRange(double angle1, double angle2, double tolerance) {
 // 指定された信号以外の信号を通る経路も考慮する
 bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteResult *outRoute) {
     // 指定された信号エッジのインデックスを取得（これらの信号は避ける）
-    int targetSignalIndices[16];
+    int targetSignalIndices[28];
     int targetSignalCount = 0;
     getTargetSignalEdges(targetSignalIndices, &targetSignalCount);
     
@@ -1295,17 +1295,22 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
 
 // 指定された信号エッジのインデックスを取得する関数
 void getTargetSignalEdges(int *targetSignalIndices, int *targetCount) {
+
+    int signals = 28;
     // 指定された信号経路（16個）
-    int targetSignals[16][2] = {
+    int targetSignals[28][2] = {
         {66, 211}, {211, 212}, {210, 212}, {66, 210},
         {25, 196}, {196, 197}, {195, 197}, {25, 195},
         {26, 199}, {199, 200}, {26, 198}, {198, 200},
-        {17, 189}, {17, 190}, {189, 190}, {190, 191}
+        {17, 189}, {17, 190}, {189, 190}, {190, 191},
+        {189, 191}, {190, 191}, {17, 189}, {17, 190},
+        {55, 252}, {251, 252}, {205, 251}, {55, 205},
+        {26, 199}, {199, 200}, {198, 200}, {26, 198}
     };
     
     *targetCount = 0;
     
-    for (int i = 0; i < 16; i++) {
+    for (int i = 0; i < signals; i++) {
         int from = targetSignals[i][0];
         int to = targetSignals[i][1];
         
@@ -1485,7 +1490,7 @@ int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteRes
     int calculatedCount = 0;  // 実際に計算した経路数
     
     // 指定された信号エッジのインデックスを取得
-    int targetSignalIndices[16];
+    int targetSignalIndices[28];
     int targetSignalCount = 0;
     getTargetSignalEdges(targetSignalIndices, &targetSignalCount);
     
@@ -1653,7 +1658,8 @@ int main(int argc, char *argv[]) {
     fprintf(stderr, "Node positions loaded\n");
 
     // 経路を保存する配列
-    RouteResult routes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を含むため余裕を持たせる
+    // 28個の信号の場合、1個:28, 2個:C(28,2)=378, 3個:C(28,3)=3276 の組み合わせがあるため、十分なサイズを確保
+    RouteResult routes[5000];  // 全網羅経路を含むため余裕を持たせる
     int routeCount = 0;
     
     RouteResult baseTime1Route;  // 基準時刻1（信号を避けた最短経路、方角制約なし）
@@ -1716,8 +1722,8 @@ int main(int argc, char *argv[]) {
         // ========== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値） ==========
         // 基準時刻1が見つからない場合も全網羅経路を計算
         fprintf(stderr, "\n=== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値）を探索 ===\n");
-        RouteResult allEnumRoutes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を一時保存
-        int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, MAX_SIGNALS * 4 + 20);
+        RouteResult allEnumRoutes[5000];  // 全網羅経路を一時保存（28個の信号に対応）
+        int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, 5000);
         fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
         
         // 基準時刻2を緑で追加
@@ -1813,7 +1819,7 @@ int main(int argc, char *argv[]) {
                 if (same) isBaseTime2 = true;
             }
             
-            if (!isBaseTime2 && routeCount < MAX_SIGNALS * 4 + 20) {
+            if (!isBaseTime2 && routeCount < 5000) {
                 // サイクルベースの厳密な待ち時間計算で再計算
                 double dist, timeSec, waitTimeSec;
                 calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
@@ -1839,8 +1845,8 @@ int main(int argc, char *argv[]) {
         // ========== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値） ==========
         // 基準時刻1 >= 基準時刻2 の場合のみ全網羅経路を計算
         fprintf(stderr, "\n=== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値）を探索 ===\n");
-        RouteResult allEnumRoutes[MAX_SIGNALS * 4 + 20];  // 全網羅経路を一時保存
-        int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, MAX_SIGNALS * 4 + 20);
+        RouteResult allEnumRoutes[5000];  // 全網羅経路を一時保存（28個の信号に対応）
+        int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, 5000);
         fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
         
         fprintf(stderr, "\n=== 表示条件に基づいて経路を分類 ===\n");
@@ -1968,7 +1974,7 @@ int main(int argc, char *argv[]) {
                 if (same) isBaseTime2 = true;
             }
             
-            if (!isBaseTime1 && !isBaseTime2 && routeCount < MAX_SIGNALS * 4 + 20) {
+            if (!isBaseTime1 && !isBaseTime2 && routeCount < 5000) {
                 // サイクルベースの厳密な待ち時間計算で再計算
                 double dist, timeSec, waitTimeSec;
                 calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
