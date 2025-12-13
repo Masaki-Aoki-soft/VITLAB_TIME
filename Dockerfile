@@ -36,6 +36,10 @@ RUN addgroup --system --gid 1001 nodejs && \
     adduser --system --uid 1001 nextjs
 
 # Cプログラムの実行に必要なライブラリをインストール
+# WASM実行のためにwasmtimeをインストール（Alpine Linux用）
+# 注意: wasmtimeのAlpine Linux用バイナリは存在しないため、
+# glibc互換レイヤー（gcompat）を使用するか、別の方法を検討する必要があります
+# ここでは、wasmtimeのインストールをスキップし、Node.jsで直接WASMを実行する方法を使用します
 RUN apk add --no-cache libc6-compat
 
 WORKDIR /app
@@ -52,8 +56,10 @@ COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
 RUN mkdir -p ./public
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
-# Cプログラムの実行ファイルをコピー
+# Cプログラムの実行ファイルをコピー（後方互換性のため）
 COPY --from=builder --chown=nextjs:nodejs /app/spfa21 /app/up44 /app/yens_algorithm /app/signal ./
+# WASMファイルをコピー
+COPY --from=builder --chown=nextjs:nodejs /app/*.wasm ./
 
 # データファイルをコピー（必要に応じて）
 COPY --from=builder --chown=nextjs:nodejs /app/oomiya_line ./oomiya_line
