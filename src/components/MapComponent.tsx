@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import {
     MapContainer,
     TileLayer,
@@ -101,6 +101,8 @@ interface MapComponentProps {
     intersectionPins?: IntersectionPin[];
     onIntersectionPinClick?: (nodeId: string, position: [number, number]) => void;
     pinSelectionState?: 'none' | 'start' | 'end';
+    onSlider194_195Change?: (distance: number, sliderType: number) => void;
+    onShowSlider194_195?: () => void;
 }
 
 // マップイベントを処理するコンポーネント
@@ -217,6 +219,8 @@ export default function MapComponent({
     intersectionPins = [],
     onIntersectionPinClick,
     pinSelectionState = 'none',
+    onSlider194_195Change,
+    onShowSlider194_195,
 }: MapComponentProps) {
     const [parameterMarkers, setParameterMarkers] = useState<L.Marker[]>([]);
     const parameterMarkersRef = useRef<L.Marker[]>([]);
@@ -224,8 +228,20 @@ export default function MapComponent({
     const currentRouteInfoRef = useRef<RouteResult | undefined>(undefined);
     const currentLayerRef = useRef<L.GeoJSON | null>(null);
 
+    // Leafletイベントの元DOMイベントを停止（型安全に扱うためのヘルパー）
+    const stopLeafletEvent = (evt: L.LeafletEvent) => {
+        const origEvent = (evt as any).originalEvent as Event | undefined;
+        if (origEvent) {
+            L.DomEvent.stop(origEvent);
+        }
+    };
+
     useEffect(() => {
-        console.log('MapComponent rendered', { routeLayers: routeLayers.length, dataLayers: dataLayers.length, startMarker });
+        console.log('MapComponent rendered', {
+            routeLayers: routeLayers.length,
+            dataLayers: dataLayers.length,
+            startMarker,
+        });
     }, [routeLayers, dataLayers, startMarker]);
 
     // 経路レイヤーが空になったときにスライダーをクリア
@@ -249,30 +265,16 @@ export default function MapComponent({
         if (currentRouteInfoRef.current && currentLayerRef.current) {
             handleRouteClick(currentRouteInfoRef.current, currentLayerRef.current);
         }
+        // 194-195のスライダーも再描画（page.tsxで管理）
+        if (onShowSlider194_195) {
+            onShowSlider194_195();
+        }
     };
 
-    // マップのズーム変更時にスライダーの長さを更新
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map) return;
-
-        map.on('zoomend', redrawSliders);
-        map.on('moveend', redrawSliders);
-
-        return () => {
-            map.off('zoomend', redrawSliders);
-            map.off('moveend', redrawSliders);
-        };
-    }, [routeLayers]);
-
     // 経路クリック時に重み設定スライダーを表示
-    const handleRouteClick = (routeInfo: RouteResult | undefined, layer: L.GeoJSON) => {
+    const handleRouteClick = async (routeInfo: RouteResult | undefined, layer: L.GeoJSON) => {
         const map = mapRef.current;
         if (!routeInfo || !map) return;
-
-        // 現在の経路情報を保存（ズーム変更時に再描画するため）
-        currentRouteInfoRef.current = routeInfo;
-        currentLayerRef.current = layer;
 
         // 前回のパラメータマーカーを削除
         parameterMarkersRef.current.forEach((marker) => {
@@ -280,178 +282,7 @@ export default function MapComponent({
         });
         parameterMarkersRef.current = [];
 
-        // 経路の各RE（セグメント）に対してスライダーを表示
-        const geojsonLayer = layer as L.GeoJSON;
-        const features = geojsonLayer.getLayers() as L.Polyline[];
-
-        // 各RE（feature）に対してスライダーを作成
-        features.forEach((feature, featureIndex) => {
-            const latlngs = feature.getLatLngs() as L.LatLng[];
-            if (latlngs.length < 2) return;
-
-            // REの始点と終点
-            const startPoint = latlngs[0];
-            const endPoint = latlngs[latlngs.length - 1];
-
-            // REの方向を計算（画面座標系で正確に計算）
-            const startPixel = map.latLngToContainerPoint(startPoint);
-            const endPixel = map.latLngToContainerPoint(endPoint);
-            
-            // 画面座標系での角度を計算（Y軸が下向きなので注意）
-            const dx = endPixel.x - startPixel.x;
-            const dy = endPixel.y - startPixel.y;
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-
-            // REの長さをピクセル単位で計算（経路と同じ長さにする）
-            const pixelLength = Math.sqrt(dx * dx + dy * dy);
-
-            // REの中心点（地理座標）
-            const centerPoint = L.latLng(
-                (startPoint.lat + endPoint.lat) / 2,
-                (startPoint.lng + endPoint.lng) / 2
-            );
-
-            // 各REごとの独立したパラメータ値（デフォルトは0）
-            const sliderKey = `route-${featureIndex}`;
-            const currentValue = routeParameterValuesRef.current.get(sliderKey) ?? 0;
-
-            // REと同じ長さのスライダーを作成（最小値制限なし、経路の長さに完全に合わせる）
-            const sliderId = `route-slider-${featureIndex}`;
-            const sliderWidth = pixelLength; // 経路と同じ長さ
-
-            const sliderDivIcon = L.divIcon({
-                className: 'route-weight-slider',
-                html: `
-                    <div style="
-                        transform: rotate(${angle}deg);
-                        transform-origin: center center;
-                        pointer-events: auto;
-                        display: flex;
-                        align-items: center;
-                        justify-content: center;
-                    ">
-                        <input
-                            type="range"
-                            id="${sliderId}"
-                            value="${currentValue}"
-                            min="-100"
-                            max="100"
-                            step="0.1"
-                            style="
-                                width: ${sliderWidth}px;
-                                height: 6px;
-                                background: #333;
-                                border-radius: 3px;
-                                outline: none;
-                                cursor: pointer;
-                                -webkit-appearance: none;
-                                appearance: none;
-                                pointer-events: auto;
-                                margin: 0;
-                            "
-                        />
-                        <style>
-                            #${sliderId}::-webkit-slider-thumb {
-                                -webkit-appearance: none;
-                                appearance: none;
-                                width: 16px;
-                                height: 16px;
-                                background: white;
-                                border: 2px solid #000;
-                                border-radius: 50%;
-                                cursor: pointer;
-                                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                                pointer-events: auto;
-                            }
-                            #${sliderId}::-moz-range-thumb {
-                                width: 16px;
-                                height: 16px;
-                                background: white;
-                                border: 2px solid #000;
-                                border-radius: 50%;
-                                cursor: pointer;
-                                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
-                                pointer-events: auto;
-                            }
-                            #${sliderId}::-webkit-slider-runnable-track {
-                                background: #333;
-                                height: 6px;
-                                border-radius: 3px;
-                            }
-                            #${sliderId}::-moz-range-track {
-                                background: #333;
-                                height: 6px;
-                                border-radius: 3px;
-                            }
-                        </style>
-                    </div>
-                `,
-                iconSize: [sliderWidth, 20],
-                iconAnchor: [sliderWidth / 2, 10],
-            });
-
-            const sliderMarker = L.marker(centerPoint, { 
-                icon: sliderDivIcon,
-                interactive: true,
-            });
-            
-            // マーカーのイベントを無効化してマップのドラッグを防ぐ
-            sliderMarker.on('mousedown', (e) => {
-                L.DomEvent.stopPropagation(e);
-            });
-            sliderMarker.on('touchstart', (e) => {
-                L.DomEvent.stopPropagation(e);
-            });
-            sliderMarker.on('click', (e) => {
-                L.DomEvent.stopPropagation(e);
-            });
-            sliderMarker.on('dblclick', (e) => {
-                L.DomEvent.stopPropagation(e);
-            });
-            
-            // マーカーが追加された後にスライダーのイベントリスナーを設定
-            sliderMarker.on('add', () => {
-                const sliderElement = document.getElementById(sliderId) as HTMLInputElement;
-                if (sliderElement) {
-                    // 既存のイベントリスナーを削除
-                    const newSlider = sliderElement.cloneNode(true) as HTMLInputElement;
-                    sliderElement.parentNode?.replaceChild(newSlider, sliderElement);
-                    
-                    // 新しいイベントリスナーを追加
-                    newSlider.addEventListener('mousedown', (e) => {
-                        e.stopPropagation();
-                        L.DomEvent.stopPropagation(e);
-                    });
-                    newSlider.addEventListener('touchstart', (e) => {
-                        e.stopPropagation();
-                        L.DomEvent.stopPropagation(e);
-                    });
-                    newSlider.addEventListener('mousemove', (e) => {
-                        e.stopPropagation();
-                        L.DomEvent.stopPropagation(e);
-                    });
-                    newSlider.addEventListener('input', (e) => {
-                        e.stopPropagation();
-                        L.DomEvent.stopPropagation(e);
-                        const value = parseFloat(newSlider.value);
-                        // 各REごとの独立したパラメータ値を保存（距離の重みとは無関係）
-                        routeParameterValuesRef.current.set(sliderKey, value);
-                    });
-                    newSlider.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        L.DomEvent.stopPropagation(e);
-                        const value = parseFloat(newSlider.value);
-                        // 各REごとの独立したパラメータ値を保存（距離の重みとは無関係）
-                        routeParameterValuesRef.current.set(sliderKey, value);
-                    });
-                }
-            });
-            
-            sliderMarker.addTo(map);
-            parameterMarkersRef.current.push(sliderMarker);
-        });
-
-        setParameterMarkers([...parameterMarkersRef.current]);
+        // 経路クリック時は何もしない（194-195のスライダーは信号クリック時にのみ表示）
         if (onRouteClick) {
             onRouteClick(routeInfo);
         }
@@ -467,7 +298,7 @@ export default function MapComponent({
         });
         parameterMarkersRef.current = [];
         setParameterMarkers([]);
-        
+
         return () => {
             parameterMarkersRef.current.forEach((marker) => {
                 if (mapRef.current) {
@@ -479,7 +310,10 @@ export default function MapComponent({
     }, [routeLayers.length]);
 
     return (
-        <div className="bg-white rounded-2xl overflow-hidden card-shadow mb-3" style={{ height: '500px', minHeight: '500px' }}>
+        <div
+            className="bg-white rounded-2xl overflow-hidden card-shadow mb-3"
+            style={{ height: '500px', minHeight: '500px' }}
+        >
             <MapContainer
                 center={[35.95017, 139.64735]}
                 zoom={15}
@@ -529,11 +363,78 @@ export default function MapComponent({
                         key={`data-${index}`}
                         data={layer.data}
                         style={layer.style}
+                        eventHandlers={{
+                            click: async (e) => {
+                                // マップのクリックイベントを停止
+                                L.DomEvent.stopPropagation(e);
+
+                                // 信号レイヤーで、特定の信号がクリックされた場合
+                                if (layer.edgeName) {
+                                    const targetEdges = ['25-196', '196-197', '195-197', '25-195'];
+                                    const edgeName = layer.edgeName;
+
+                                    // 正規化（順序を考慮）
+                                    const normalizedEdge = edgeName.includes('-')
+                                        ? edgeName
+                                        : edgeName;
+                                    const reversedEdge = edgeName.includes('-')
+                                        ? edgeName.split('-').reverse().join('-')
+                                        : edgeName;
+
+                                    const isTargetSignal = targetEdges.some(
+                                        (targetEdge) =>
+                                            normalizedEdge === targetEdge ||
+                                            reversedEdge === targetEdge
+                                    );
+
+                                    if (isTargetSignal && onShowSlider194_195) {
+                                        // 194-195のスライダーを表示（page.tsxで管理）
+                                        onShowSlider194_195();
+                                    }
+                                }
+                            },
+                            mousedown: (e) => {
+                                L.DomEvent.stopPropagation(e);
+                            },
+                        }}
                         onEachFeature={(feature, layerInstance) => {
                             if (layer.popup) {
                                 layerInstance.bindPopup(layer.popup);
                             }
                             layerInstance.on({
+                                click: async (e) => {
+                                    L.DomEvent.stopPropagation(e);
+
+                                    // 信号レイヤーで、特定の信号がクリックされた場合
+                                    if (layer.edgeName) {
+                                        const targetEdges = [
+                                            '25-196',
+                                            '196-197',
+                                            '195-197',
+                                            '25-195',
+                                        ];
+                                        const edgeName = layer.edgeName;
+
+                                        // 正規化（順序を考慮）
+                                        const normalizedEdge = edgeName.includes('-')
+                                            ? edgeName
+                                            : edgeName;
+                                        const reversedEdge = edgeName.includes('-')
+                                            ? edgeName.split('-').reverse().join('-')
+                                            : edgeName;
+
+                                        const isTargetSignal = targetEdges.some(
+                                            (targetEdge) =>
+                                                normalizedEdge === targetEdge ||
+                                                reversedEdge === targetEdge
+                                        );
+
+                                        if (isTargetSignal && onShowSlider194_195) {
+                                            // 194-195のスライダーを表示（page.tsxで管理）
+                                            onShowSlider194_195();
+                                        }
+                                    }
+                                },
                                 mouseover: (e) => {
                                     const target = e.target;
                                     target.setStyle({
@@ -584,14 +485,18 @@ export default function MapComponent({
                         pinColor = 'yellow'; // 終点選択待ちは黄
                     }
 
-                    const pinIcon = typeof window !== 'undefined' ? new L.Icon({
-                        iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${pinColor}.png`,
-                        shadowUrl: 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
-                        iconSize: [25, 41],
-                        iconAnchor: [12, 41],
-                        popupAnchor: [1, -34],
-                        shadowSize: [41, 41],
-                    }) : null;
+                    const pinIcon =
+                        typeof window !== 'undefined'
+                            ? new L.Icon({
+                                  iconUrl: `https://raw.githubusercontent.com/pointhi/leaflet-color-markers/master/img/marker-icon-2x-${pinColor}.png`,
+                                  shadowUrl:
+                                      'https://cdnjs.cloudflare.com/ajax/libs/leaflet/0.7.7/images/marker-shadow.png',
+                                  iconSize: [25, 41],
+                                  iconAnchor: [12, 41],
+                                  popupAnchor: [1, -34],
+                                  shadowSize: [41, 41],
+                              })
+                            : null;
 
                     return (
                         <Marker
