@@ -85,6 +85,7 @@ int   signalCount = 0;
 NodePosition nodePositions[MAX_NODES];  // ノード位置情報
 
 double walkingSpeed = DEFAULT_WALKING_SPEED; // m/min
+double phaseShift = 0.0; // 位相シフト（秒）
 
 /* ---------- 共通ユーティリティ ---------- */
 
@@ -128,17 +129,12 @@ double getEdgeTimeSeconds(int from, int to) {
     int nf, nt;
     normalizeEdgeKey(from, to, &nf, &nt);
     bool isDangerousRoute = false;
-    int dangerousFrom = 0, dangerousTo = 0;
     
     // 危険な経路のチェック
     if (nf == 22 && nt == 194) {
         isDangerousRoute = true;
-        dangerousFrom = 22;
-        dangerousTo = 194;
     } else if (nf == 18 && nt == 192) {
         isDangerousRoute = true;
-        dangerousFrom = 18;
-        dangerousTo = 192;
     }
     
     // 勾配による速度補正（元コードと同じロジック）
@@ -151,8 +147,6 @@ double getEdgeTimeSeconds(int from, int to) {
     // 危険な経路の場合は、時間に大きなペナルティを追加（10倍）
     if (isDangerousRoute) {
         timeSeconds *= 10.0;  // 10倍のペナルティ
-        fprintf(stderr, "警告: 危険な経路%d-%dを検出。時間にペナルティを追加: %.2f秒 → %.2f秒\n", 
-                dangerousFrom, dangerousTo, timeMinutes * 60.0, timeSeconds);
     }
     
     return timeSeconds;
@@ -188,21 +182,16 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
     // 方角制約を使用するかどうか：常にfalse（方角制約を無効化）
     bool   useAngleConstraint = false;
     
-    fprintf(stderr, "方角制約を使用しない（方角制約を無効化）\n");
-    
     // 避けるべきエッジのセットを作成
     bool avoidEdgeSet[MAX_EDGES];
     for (int i = 0; i < MAX_EDGES; i++) {
         avoidEdgeSet[i] = false;
     }
-    int validAvoidCount = 0;
     for (int i = 0; i < avoidCount; i++) {
         if (avoidEdgeIndices[i] >= 0 && avoidEdgeIndices[i] < MAX_EDGES) {
             avoidEdgeSet[avoidEdgeIndices[i]] = true;
-            validAvoidCount++;
         }
     }
-    fprintf(stderr, "避けるべき信号エッジ: %d個設定\n", validAvoidCount);
 
     for (int i = 0; i < MAX_NODES; i++) {
         dist[i] = INF;
@@ -211,10 +200,6 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
     }
     dist[start] = 0.0;
 
-    int visitedCount = 0;
-    int skippedByAngleCount = 0;
-    int skippedBySignalCount = 0;
-    
     while (1) {
         int    u   = -1;
         double d_u = INF;
@@ -226,7 +211,6 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
         }
         if (u == -1 || u == goal) break;
         used[u] = true;
-        visitedCount++;
 
         for (int i = 0; i < graph[u].edge_count; i++) {
             int v       = graph[u].edges[i].node;
@@ -235,7 +219,6 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
             
             // 指定された信号エッジのみを避ける（他の信号は通ってもよい）
             if (avoidEdgeSet[edgeIdx]) {
-                skippedBySignalCount++;
                 continue;
             }
             
@@ -256,7 +239,6 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
                 }
                 
                 if (!edgeOk) {
-                    skippedByAngleCount++;
                     continue;  // 方角が範囲外
                 }
             }
@@ -271,9 +253,6 @@ DijkstraResult dijkstraAvoidTargetSignals(int start, int goal, double targetBear
             }
         }
     }
-    
-    fprintf(stderr, "探索統計: 訪問ノード数=%d, 方角制約でスキップ=%d, 信号制約でスキップ=%d\n",
-            visitedCount, skippedByAngleCount, skippedBySignalCount);
 
     DijkstraResult res;
     res.cost       = dist[goal];
@@ -588,7 +567,9 @@ double calculateWaitTimeWithReference(int edgeIdx, double cumulativeTime, double
     EdgeData *edge = &edgeDataArray[edgeIdx];
     if (!edge->isSignal || edge->signalCycle <= 0) return 0.0;
     
-    double phaseDiff = fabs(edge->signalPhase - referencePhase);
+    // 位相シフトを加算（signal_inf.csvから取得した位相に追加の位相シフトを加算）
+    double adjustedPhase = edge->signalPhase + phaseShift;
+    double phaseDiff = fabs(adjustedPhase - referencePhase);
     double arrivalTime = cumulativeTime;
     double timeIntoCycle = fmod(
         arrivalTime - phaseDiff + edge->signalCycle,
@@ -613,7 +594,7 @@ void calcRouteMetricsWithCycleBasedWaitTime(const int *edgeIdxs, int edgeCount,
     double signalWaitTime = 0.0;  // 信号の待ち時間のみ
     double crosswalkWaitTime = 0.0;  // 60-209横断歩道の待ち時間のみ
     
-    // 最初の信号エッジの位相を基準位相として取得
+    // 最初の信号エッジの位相を基準位相として取得（位相シフトは加算しない）
     double referencePhase = 0.0;
     bool hasReferencePhase = false;
     for (int i = 0; i < edgeCount; i++) {
@@ -666,19 +647,13 @@ void calcRouteMetricsWithCycleBasedWaitTime(const int *edgeIdxs, int edgeCount,
             } else {
                 // signal_inf.csvにデータが無い場合のフォールバック: 20秒
                 crosswalkWait = 20.0;  // 秒
-                fprintf(stderr, "  警告: 60-209横断歩道のsignalExpectedが0.0のため、固定値20秒を使用します\n");
             }
             crosswalkWaitTime += crosswalkWait;
             totalWaitTime += crosswalkWait;
             totalTime += crosswalkWait;
             cumulativeTime += crosswalkWait;
-            fprintf(stderr, "  60-209横断歩道: 待ち時間%.2f秒を追加 (isBaseTime1=%s, 累計信号待ち=%.2f秒, 累計横断歩道待ち=%.2f秒)\n", 
-                    crosswalkWait, isBaseTime1 ? "true" : "false", signalWaitTime, crosswalkWaitTime);
         }
     }
-    
-    fprintf(stderr, "  calcRouteMetricsWithCycleBasedWaitTime: 信号待ち=%.2f秒, 横断歩道待ち=%.2f秒, 合計待ち=%.2f秒 (isBaseTime1=%s)\n",
-            signalWaitTime, crosswalkWaitTime, totalWaitTime, isBaseTime1 ? "true" : "false");
     
     *outDist = totalDist;
     *outTimeSec = totalTime;
@@ -722,8 +697,6 @@ void calcRouteMetricsWithWaitTimeAndBaseTime1(const int *edgeIdxs, int edgeCount
         if (idx == crosswalk60_209Idx && useExpectedWaitTime) {
             if (e->signalExpected > 0.0) {
                 totalTime += e->signalExpected * 60.0;  // 期待待ち時間を秒に変換
-                fprintf(stderr, "  60-209横断歩道: 待ち時間%.2f秒を追加\n", 
-                        e->signalExpected * 60.0);
             }
         }
     }
@@ -873,7 +846,6 @@ void loadRouteData(const char *filename) {
 void loadSignalData(const char *filename) {
     FILE *fp = fopen(filename, "r");
     if (!fp) {
-        fprintf(stderr, "Warning: cannot open %s\n", filename);
         return;
     }
 
@@ -891,15 +863,11 @@ void loadSignalData(const char *filename) {
         int n = sscanf(line, "%d,%d,%lf,%lf,%lf,%lf",
                        &from, &to, &cycle, &green, &phase, &expected);
         if (n < 6) {
-            fprintf(stderr, "Warning: failed to parse signal line: %s", line);
             continue;
         }
 
         int edgeIdx = findEdgeIndex(from, to);
         if (edgeIdx < 0) {
-            fprintf(stderr,
-                    "Warning: signal edge %d-%d not found in graph\n",
-                    from, to);
             continue;
         }
 
@@ -920,18 +888,10 @@ void loadSignalData(const char *filename) {
 
         if (!isCrosswalk60_209 && signalCount < MAX_SIGNALS) {
             signalEdges[signalCount++] = edgeIdx;
-            fprintf(stderr,
-                    "Signal %d: edge %d (%d-%d) cycle=%.0f green=%.0f phase=%.2f expected=%.2f\n",
-                    signalCount, edgeIdx, from, to, cycle, green, phase, expected);
-        } else if (isCrosswalk60_209) {
-            fprintf(stderr,
-                    "Crosswalk (no signal) %d-%d: expected=%.2f\n",
-                    nf, nt, expected);
         }
     }
 
     fclose(fp);
-    fprintf(stderr, "Loaded %d signals from signal_inf.csv\n", signalCount);
 }
 
 // GeoJSONからノード位置情報を読み込む
@@ -995,17 +955,10 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
     int targetSignalCount = 0;
     getTargetSignalEdges(targetSignalIndices, &targetSignalCount);
     
-    fprintf(stderr, "基準時刻1探索: 方角制約なしで信号を避けた経路を探索\n");
-    fprintf(stderr, "指定された信号を避けます。他の信号を通る経路も考慮します。\n");
-    fprintf(stderr, "指定信号数: %d個\n", targetSignalCount);
-    
     // 指定された信号のみを避けた経路を探索（他の信号は通ってもよい）
     // 方角制約なしで探索
     DijkstraResult avoidSignalPath = dijkstraAvoidTargetSignals(startNode, endNode, targetBearing, 
                                                                  targetSignalIndices, targetSignalCount);
-    
-    fprintf(stderr, "基準時刻1探索結果: cost=%.2f, pathLength=%d\n", 
-            avoidSignalPath.cost, avoidSignalPath.pathLength);
     
     if (avoidSignalPath.cost < INF) {
         RouteResult r;
@@ -1036,10 +989,8 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
                         } else {
                             // signal_inf.csvにデータが無い場合のフォールバック: 20秒
                             crosswalkWait = 20.0;  // 秒
-                            fprintf(stderr, "基準時刻1: 警告: 60-209横断歩道のsignalExpectedが0.0のため、固定値20秒を使用します\n");
                         }
                         r.totalTimeSeconds += crosswalkWait;
-                        fprintf(stderr, "基準時刻1: 60-209横断歩道が経路に含まれているため、待ち時間%.2f秒を追加\n", crosswalkWait);
                         break;
                     }
                 }
@@ -1052,21 +1003,15 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
                     if (edgeDataArray[edgeIdx].isSignal) {
                         r.hasSignal = 1;
                         r.signalEdgeIdx = edgeIdx;
-                        fprintf(stderr, "警告: 基準時刻1の経路に信号が含まれています（edgeIdx=%d）\n", edgeIdx);
                         break;
                     }
                 }
             }
             
-            fprintf(stderr, "基準時刻1候補: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min), hasSignal=%d\n",
-                    r.edgeCount, r.totalDistance, r.totalTimeSeconds, r.totalTimeSeconds / 60.0, r.hasSignal);
-            
             *outRoute = r;
             return true;
         }
     } else {
-        fprintf(stderr, "基準時刻1: 経路が見つかりませんでした。再探索します。\n");
-        
         // 方角制約なしで信号を避けた最短経路を探索（フォールバック）
         DijkstraResult fallbackPath = dijkstra(startNode, endNode);
         
@@ -1128,10 +1073,8 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
                             } else {
                                 // signal_inf.csvにデータが無い場合のフォールバック: 20秒
                                 crosswalkWait = 20.0;  // 秒
-                                fprintf(stderr, "基準時刻1（フォールバック）: 警告: 60-209横断歩道のsignalExpectedが0.0のため、固定値20秒を使用します\n");
                             }
                             r.totalTimeSeconds += crosswalkWait;
-                            fprintf(stderr, "基準時刻1（フォールバック）: 60-209横断歩道が経路に含まれているため、待ち時間%.2f秒を追加\n", crosswalkWait);
                             break;
                         }
                     }
@@ -1149,16 +1092,12 @@ bool calculateBaseTime1(int startNode, int endNode, double targetBearing, RouteR
                     }
                 }
                 
-                fprintf(stderr, "基準時刻1（フォールバック）: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min), hasSignal=%d\n",
-                        r.edgeCount, r.totalDistance, r.totalTimeSeconds, r.totalTimeSeconds / 60.0, r.hasSignal);
-                
                 *outRoute = r;
                 return true;
             }
         }
     }
     
-    fprintf(stderr, "基準時刻1: 経路が見つかりませんでした。\n");
     return false;
 }
 
@@ -1211,7 +1150,6 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
                                 EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
                                 if (e->signalExpected > 0.0) {
                                     crosswalkWaitTime = e->signalExpected * 60.0;  // 秒
-                                    fprintf(stderr, "  基準時刻2: 60-209横断歩道の待ち時間%.2f秒を保持（信号の待ち時間は除外）\n", crosswalkWaitTime);
                                     break;
                                 }
                             }
@@ -1220,8 +1158,6 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
                     // 信号の待ち時間のみを除外（60-209横断歩道の待ち時間は保持）
                     double signalWaitTimeOnly = waitTime - crosswalkWaitTime;
                     r.totalTimeSeconds = originalTotalTime - signalWaitTimeOnly;
-                    fprintf(stderr, "  基準時刻2: 総待ち時間=%.2f秒（信号=%.2f秒, 横断歩道=%.2f秒）→信号のみ除外して%.2f秒に調整\n",
-                            waitTime, signalWaitTimeOnly, crosswalkWaitTime, r.totalTimeSeconds);
                     if (r.totalTimeSeconds < minTime) {
                         minTime = r.totalTimeSeconds;
                         bestRoute = r;
@@ -1266,7 +1202,6 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
                                 EdgeData *e = &edgeDataArray[crosswalk60_209Idx];
                                 if (e->signalExpected > 0.0) {
                                     crosswalkWaitTime = e->signalExpected * 60.0;  // 秒
-                                    fprintf(stderr, "  基準時刻2: 60-209横断歩道の待ち時間%.2f秒を保持（信号の待ち時間は除外）\n", crosswalkWaitTime);
                                     break;
                                 }
                             }
@@ -1275,8 +1210,6 @@ bool calculateBaseTime2(int startNode, int endNode, RouteResult *outRoute) {
                     // 信号の待ち時間のみを除外（60-209横断歩道の待ち時間は保持）
                     double signalWaitTimeOnly = waitTime - crosswalkWaitTime;
                     r.totalTimeSeconds = originalTotalTime - signalWaitTimeOnly;
-                    fprintf(stderr, "  基準時刻2: 総待ち時間=%.2f秒（信号=%.2f秒, 横断歩道=%.2f秒）→信号のみ除外して%.2f秒に調整\n",
-                            waitTime, signalWaitTimeOnly, crosswalkWaitTime, r.totalTimeSeconds);
                     if (r.totalTimeSeconds < minTime) {
                         minTime = r.totalTimeSeconds;
                         bestRoute = r;
@@ -1302,10 +1235,7 @@ void getTargetSignalEdges(int *targetSignalIndices, int *targetCount) {
         {66, 211}, {211, 212}, {210, 212}, {66, 210},
         {25, 196}, {196, 197}, {195, 197}, {25, 195},
         {26, 199}, {199, 200}, {26, 198}, {198, 200},
-        {17, 189}, {17, 190}, {189, 190}, {190, 191},
-        {189, 191}, {190, 191}, {17, 189}, {17, 190},
-        {55, 252}, {251, 252}, {205, 251}, {55, 205},
-        {26, 199}, {199, 200}, {198, 200}, {26, 198}
+        {17, 189}, {17, 190}, {189, 190}, {190, 191}
     };
     
     *targetCount = 0;
@@ -1323,9 +1253,6 @@ void getTargetSignalEdges(int *targetSignalIndices, int *targetCount) {
         if (edgeIdx >= 0 && edgeDataArray[edgeIdx].isSignal) {
             targetSignalIndices[*targetCount] = edgeIdx;
             (*targetCount)++;
-            fprintf(stderr, "Target signal %d: edgeIdx=%d (%d-%d)\n", *targetCount, edgeIdx, nf, nt);
-        } else {
-            fprintf(stderr, "Warning: Target signal %d-%d not found or not a signal\n", nf, nt);
         }
     }
 }
@@ -1355,8 +1282,9 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
                 if (r.edgeCount < MAX_PATH_LENGTH)
                     r.edges[r.edgeCount++] = edgeIdx;
                 if (appendSegment(&r, &seg2)) {
-                    calcRouteMetricsWithWaitTimeAndBaseTime1(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, true, false);
+                    double waitTime;
+                    calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &r.totalTimeSeconds, &waitTime, false);
                     *outRoute = r;
                     return true;
                 }
@@ -1377,8 +1305,9 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
                 if (r.edgeCount < MAX_PATH_LENGTH)
                     r.edges[r.edgeCount++] = edgeIdx;
                 if (appendSegment(&r, &seg2)) {
-                    calcRouteMetricsWithWaitTimeAndBaseTime1(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, true, false);
+                    double waitTime;
+                    calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &r.totalTimeSeconds, &waitTime, false);
                     *outRoute = r;
                     return true;
                 }
@@ -1442,8 +1371,9 @@ bool findRouteThroughSignals(int startNode, int endNode, int *signalIndices, int
             if (success) {
                 DijkstraResult seg2 = dijkstra(current, endNode);
                 if (seg2.cost < INF && appendSegment(&r, &seg2)) {
-                    calcRouteMetricsWithWaitTimeAndBaseTime1(r.edges, r.edgeCount,
-                                                 &r.totalDistance, &r.totalTimeSeconds, true, false);
+                    double waitTime;
+                    calcRouteMetricsWithCycleBasedWaitTime(r.edges, r.edgeCount,
+                                                 &r.totalDistance, &r.totalTimeSeconds, &waitTime, false);
                     *outRoute = r;
                     return true;
                 }
@@ -1466,11 +1396,6 @@ void generateCombinations(int startNode, int endNode, int *signalIndices, int si
         if (findRouteThroughSignals(startNode, endNode, current, currentSize, &r)) {
             r.routeType = 2;  // 赤
             outRoutes[*outCount] = r;
-            // 最初の5件と最後の5件、および10件ごとにログ出力
-            if (*outCount < 5 || (*outCount >= (*outCount / 10) * 10 && *outCount < (*outCount / 10) * 10 + 5) || *outCount >= maxRoutes - 5) {
-                fprintf(stderr, "  経路[%d]: totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間)\n", 
-                        *outCount, r.totalTimeSeconds);
-            }
             (*outCount)++;
         }
         return;
@@ -1494,10 +1419,7 @@ int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteRes
     int targetSignalCount = 0;
     getTargetSignalEdges(targetSignalIndices, &targetSignalCount);
     
-    fprintf(stderr, "指定された信号エッジ: %d個見つかりました\n", targetSignalCount);
-    
     if (targetSignalCount == 0) {
-        fprintf(stderr, "Warning: 指定された信号エッジが見つかりませんでした\n");
         return 0;
     }
     
@@ -1505,44 +1427,23 @@ int calculateAllEnumRoutes(int startNode, int endNode, int signalCount, RouteRes
     int current[3];
     
     // 1個の組み合わせ
-    fprintf(stderr, "1個の信号を通る経路を探索中...\n");
     for (int i = 0; i < targetSignalCount && count < maxRoutes; i++) {
         current[0] = targetSignalIndices[i];
         RouteResult r;
-        calculatedCount++;  // 試行回数をカウント（経路探索を試みた回数）
-        // findRouteThroughSignals内でcalcRouteMetricsWithWaitTime(..., true)が呼ばれるため、
-        // 移動時間+信号待ち時間が計算される
+        calculatedCount++;
         if (findRouteThroughSignals(startNode, endNode, current, 1, &r)) {
             r.routeType = 2;  // 赤
             outRoutes[count++] = r;
-            // 各経路について、移動時間+信号待ち時間が計算されていることを確認
-            fprintf(stderr, "  経路[%d]: totalTimeSeconds=%.2f秒 (移動時間+信号待ち時間が計算済み)\n", 
-                    count - 1, r.totalTimeSeconds);
         }
     }
-    fprintf(stderr, "1個の信号を通る経路: %d本生成 (試行: %d回、全試行で移動時間+信号待ち時間を計算)\n", count, calculatedCount);
     
     // 2個の組み合わせ
-    fprintf(stderr, "2個の信号を通る経路を探索中...\n");
-    int countBefore2 = count;
-    int calculatedBefore2 = calculatedCount;
     generateCombinations(startNode, endNode, targetSignalIndices, targetSignalCount,
                         current, 0, 2, 0, outRoutes, &count, maxRoutes, &calculatedCount);
-    fprintf(stderr, "2個の信号を通る経路: %d本生成 (試行: %d回)\n", 
-            count - countBefore2, calculatedCount - calculatedBefore2);
     
     // 3個の組み合わせ
-    fprintf(stderr, "3個の信号を通る経路を探索中...\n");
-    int countBefore3 = count;
-    int calculatedBefore3 = calculatedCount;
     generateCombinations(startNode, endNode, targetSignalIndices, targetSignalCount,
                         current, 0, 3, 0, outRoutes, &count, maxRoutes, &calculatedCount);
-    fprintf(stderr, "3個の信号を通る経路: %d本生成 (試行: %d回)\n", 
-            count - countBefore3, calculatedCount - calculatedBefore3);
-    
-    fprintf(stderr, "全網羅経路計算完了: 合計%d本生成 (総試行回数: %d回)\n", count, calculatedCount);
-    fprintf(stderr, "注意: 全%d本の経路について、findRouteThroughSignals内で移動時間+信号待ち時間が計算されています\n", count);
-    fprintf(stderr, "最短経路を選ぶ際、全%d本のtotalTimeSecondsを比較します\n", count);
     
     return count;
 }
@@ -1631,8 +1532,8 @@ void printJSON(const RouteResult *routes, int routeCount) {
 /* ---------- メイン ---------- */
 
 int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Usage: %s <start_node> <end_node> <walking_speed>\n", argv[0]);
+    if (argc != 4 && argc != 5) {
+        fprintf(stderr, "Usage: %s <start_node> <end_node> <walking_speed> [phase_shift]\n", argv[0]);
         return 1;
     }
 
@@ -1640,6 +1541,13 @@ int main(int argc, char *argv[]) {
     int    endNode   = atoi(argv[2]);
     double ws        = atof(argv[3]);
     if (ws > 0.0) walkingSpeed = ws;
+    
+    // 位相シフト（4つ目の引数、デフォルト0秒）
+    if (argc == 5) {
+        phaseShift = atof(argv[4]);
+    } else {
+        phaseShift = 0.0;
+    }
 
     if (startNode < 1 || startNode >= MAX_NODES ||
         endNode   < 1 || endNode   >= MAX_NODES) {
@@ -1650,12 +1558,8 @@ int main(int argc, char *argv[]) {
     initGraph();
     loadGraphFromResult("result.csv");
     loadRouteData("oomiya_route_inf_4.csv");
-    fprintf(stderr, "Loading signal data...\n");
     loadSignalData("signal_inf.csv");
-    fprintf(stderr, "Loaded %d signals total\n", signalCount);
-    fprintf(stderr, "Loading node positions...\n");
     loadNodePositions();
-    fprintf(stderr, "Node positions loaded\n");
 
     // 経路を保存する配列
     // 28個の信号の場合、1個:28, 2個:C(28,2)=378, 3個:C(28,3)=3276 の組み合わせがあるため、十分なサイズを確保
@@ -1674,57 +1578,24 @@ int main(int argc, char *argv[]) {
             nodePositions[startNode].lat, nodePositions[startNode].lon,
             nodePositions[endNode].lat, nodePositions[endNode].lon
         );
-        fprintf(stderr, "スタート→ゴールの方角: %.2f度（参考情報、方角制約は使用していません）\n", targetBearing);
-    } else {
-        fprintf(stderr, "Warning: ノード位置情報が読み込まれていません。\n");
     }
     
     // ========== 第一段階：基準時刻1（信号を避けた最短経路、方角制約なし） ==========
-    fprintf(stderr, "\n=== 第一段階：基準時刻1（信号を避けた最短経路、方角制約なし）を計算 ===\n");
     hasBaseTime1Route = calculateBaseTime1(startNode, endNode, targetBearing, &baseTime1Route);
-    if (hasBaseTime1Route) {
-        fprintf(stderr,
-                "基準時刻1確定: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min), hasSignal=%d\n",
-                baseTime1Route.edgeCount, baseTime1Route.totalDistance,
-                baseTime1Route.totalTimeSeconds, baseTime1Route.totalTimeSeconds / 60.0,
-                baseTime1Route.hasSignal);
-    } else {
-        fprintf(stderr, "警告: 基準時刻1の経路が見つかりませんでした。この場合、基準時刻2のみが表示されます。\n");
-    }
     
     // ========== 第二段階：基準時刻2（信号を通る最短経路、待ち時間0、方角制約なし） ==========
-    fprintf(stderr, "\n=== 第二段階：基準時刻2（信号を通る最短経路、待ち時間0、方角制約なし）を計算 ===\n");
     hasBaseTime2Route = calculateBaseTime2(startNode, endNode, &baseTime2Route);
-    if (hasBaseTime2Route) {
-        fprintf(stderr,
-                "基準時刻2確定: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min), hasSignal=%d\n",
-                baseTime2Route.edgeCount, baseTime2Route.totalDistance,
-                baseTime2Route.totalTimeSeconds, baseTime2Route.totalTimeSeconds / 60.0,
-                baseTime2Route.hasSignal);
-    } else {
-        fprintf(stderr, "基準時刻2の経路が見つかりませんでした。\n");
-    }
-    
-    // ========== 表示条件に基づいて経路を分類 ==========
-    fprintf(stderr, "\n=== 基準時刻を比較して表示条件を決定 ===\n");
     
     // 基準時刻1と基準時刻2の時間を比較
     double baseTime1Seconds = hasBaseTime1Route ? baseTime1Route.totalTimeSeconds : INF;
     double baseTime2Seconds = hasBaseTime2Route ? baseTime2Route.totalTimeSeconds : INF;
     
-    fprintf(stderr, "基準時刻1: %.2f sec, 基準時刻2: %.2f sec\n",
-            baseTime1Seconds, baseTime2Seconds);
-    
     // 基準時刻1が見つからない場合の処理
     if (!hasBaseTime1Route) {
-        fprintf(stderr, "基準時刻1が見つからないため、基準時刻2を緑で表示します。\n");
-        
         // ========== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値） ==========
         // 基準時刻1が見つからない場合も全網羅経路を計算
-        fprintf(stderr, "\n=== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値）を探索 ===\n");
         RouteResult allEnumRoutes[5000];  // 全網羅経路を一時保存（28個の信号に対応）
         int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, 5000);
-        fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
         
         // 基準時刻2を緑で追加
         if (hasBaseTime2Route) {
@@ -1733,10 +1604,8 @@ int main(int argc, char *argv[]) {
         }
         
         // 全網羅経路の中で、実際の信号待ち時間を含めた総時間が最短の経路を見つける（赤色で表示）
-        fprintf(stderr, "\n=== 全%d本の経路から最短経路を選出（全経路のtotalTimeSecondsを比較） ===\n", allEnumRouteCount);
         int bestEnumRouteIdx = -1;
         double bestEnumRouteTime = INF;
-        int checkedCount = 0;  // 実際にチェックした経路数
         
         for (int i = 0; i < allEnumRouteCount; i++) {
             RouteResult *r = &allEnumRoutes[i];
@@ -1758,24 +1627,9 @@ int main(int argc, char *argv[]) {
             // 重複していない経路で、総時間が最短のものを探す
             // 網羅的経路の最終比較では、サイクルベースの厳密な待ち時間計算を使用
             if (!isBaseTime2) {
-                checkedCount++;
-                
                 // サイクルベースの厳密な待ち時間計算で再計算
                 double dist, timeSec, waitTimeSec;
                 calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
-                
-                // 最初の5件、最後の5件、最短経路候補が更新された時のみログ出力
-                if (i < 5 || i >= allEnumRouteCount - 5 || timeSec < bestEnumRouteTime) {
-                    if (i < 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
-                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
-                    } else if (i >= allEnumRouteCount - 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
-                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
-                    } else if (timeSec < bestEnumRouteTime) {
-                        fprintf(stderr, "  経路[%d]: 新たな最短候補! 合計=%.2f秒 (サイクルベース計算)\n", i, timeSec);
-                    }
-                }
                 
                 if (timeSec < bestEnumRouteTime) {
                     bestEnumRouteTime = timeSec;
@@ -1786,17 +1640,11 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-        fprintf(stderr, "全%d本の経路をチェックしました（重複除外後: %d本）\n", allEnumRouteCount, checkedCount);
         
         // 最短の全網羅経路を赤色で追加（1本のみ）
         if (bestEnumRouteIdx >= 0) {
             allEnumRoutes[bestEnumRouteIdx].routeType = 2;  // 赤
             routes[routeCount++] = allEnumRoutes[bestEnumRouteIdx];
-            fprintf(stderr, "最短全網羅経路（赤）: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min)\n",
-                    allEnumRoutes[bestEnumRouteIdx].edgeCount,
-                    allEnumRoutes[bestEnumRouteIdx].totalDistance,
-                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds,
-                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds / 60.0);
         }
         
         // その他の全網羅経路を黄色で追加（routeType=3）
@@ -1830,12 +1678,9 @@ int main(int argc, char *argv[]) {
                 yellowCount++;
             }
         }
-        fprintf(stderr, "全網羅経路（黄色）: %d本追加\n", yellowCount);
     }
     // 基準時刻1 < 基準時刻2 の場合
     else if (baseTime1Seconds < baseTime2Seconds) {
-        fprintf(stderr, "基準時刻1 < 基準時刻2: 基準時刻1（緑）のみを表示（全網羅経路は計算しない）\n");
-        
         // 基準時刻1を緑で追加（全網羅経路は計算・表示しない）
         baseTime1Route.routeType = 1;  // 緑
         routes[routeCount++] = baseTime1Route;
@@ -1844,13 +1689,8 @@ int main(int argc, char *argv[]) {
     else {
         // ========== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値） ==========
         // 基準時刻1 >= 基準時刻2 の場合のみ全網羅経路を計算
-        fprintf(stderr, "\n=== 第三段階：全網羅（指定信号の1,2,3個の組み合わせを通る経路、待ち時間期待値）を探索 ===\n");
         RouteResult allEnumRoutes[5000];  // 全網羅経路を一時保存（28個の信号に対応）
         int allEnumRouteCount = calculateAllEnumRoutes(startNode, endNode, signalCount, allEnumRoutes, 5000);
-        fprintf(stderr, "全網羅経路: %d本生成\n", allEnumRouteCount);
-        
-        fprintf(stderr, "\n=== 表示条件に基づいて経路を分類 ===\n");
-        fprintf(stderr, "基準時刻1 >= 基準時刻2: 基準時刻1を緑、基準時刻2を青、最短全網羅を赤で表示\n");
         
         // 基準時刻1を緑で追加
         baseTime1Route.routeType = 1;  // 緑
@@ -1863,10 +1703,8 @@ int main(int argc, char *argv[]) {
         }
         
         // 全網羅経路の中で、実際の信号待ち時間を含めた総時間が最短の経路を見つける（赤色で表示）
-        fprintf(stderr, "\n=== 全%d本の経路から最短経路を選出（全経路のtotalTimeSecondsを比較） ===\n", allEnumRouteCount);
         int bestEnumRouteIdx = -1;
         double bestEnumRouteTime = INF;
-        int checkedCount = 0;  // 実際にチェックした経路数
         
         for (int i = 0; i < allEnumRouteCount; i++) {
             RouteResult *r = &allEnumRoutes[i];
@@ -1900,24 +1738,9 @@ int main(int argc, char *argv[]) {
             // 重複していない経路で、総時間が最短のものを探す
             // 網羅的経路の最終比較では、サイクルベースの厳密な待ち時間計算を使用
             if (!isBaseTime1 && !isBaseTime2) {
-                checkedCount++;
-                
                 // サイクルベースの厳密な待ち時間計算で再計算
                 double dist, timeSec, waitTimeSec;
                 calcRouteMetricsWithCycleBasedWaitTime(r->edges, r->edgeCount, &dist, &timeSec, &waitTimeSec, false);
-                
-                // 最初の5件、最後の5件、最短経路候補が更新された時のみログ出力
-                if (i < 5 || i >= allEnumRouteCount - 5 || timeSec < bestEnumRouteTime) {
-                    if (i < 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
-                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
-                    } else if (i >= allEnumRouteCount - 5) {
-                        fprintf(stderr, "  経路[%d]: 移動時間=%.2f秒, サイクルベース待ち時間=%.2f秒, 合計=%.2f秒\n",
-                                i, timeSec - waitTimeSec, waitTimeSec, timeSec);
-                    } else if (timeSec < bestEnumRouteTime) {
-                        fprintf(stderr, "  経路[%d]: 新たな最短候補! 合計=%.2f秒 (サイクルベース計算)\n", i, timeSec);
-                    }
-                }
                 
                 if (timeSec < bestEnumRouteTime) {
                     bestEnumRouteTime = timeSec;
@@ -1928,17 +1751,11 @@ int main(int argc, char *argv[]) {
                 }
             }
         }
-        fprintf(stderr, "全%d本の経路をチェックしました（重複除外後: %d本）\n", allEnumRouteCount, checkedCount);
         
         // 最短の全網羅経路を赤色で追加（1本のみ）
         if (bestEnumRouteIdx >= 0) {
             allEnumRoutes[bestEnumRouteIdx].routeType = 2;  // 赤
             routes[routeCount++] = allEnumRoutes[bestEnumRouteIdx];
-            fprintf(stderr, "最短全網羅経路（赤）: edges=%d, distance=%.2f m, time=%.2f sec (%.2f min)\n",
-                    allEnumRoutes[bestEnumRouteIdx].edgeCount,
-                    allEnumRoutes[bestEnumRouteIdx].totalDistance,
-                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds,
-                    allEnumRoutes[bestEnumRouteIdx].totalTimeSeconds / 60.0);
         }
         
         // その他の全網羅経路を黄色で追加（routeType=3）
@@ -1985,21 +1802,7 @@ int main(int argc, char *argv[]) {
                 yellowCount++;
             }
         }
-        fprintf(stderr, "全網羅経路（黄色）: %d本追加\n", yellowCount);
     }
-    
-    fprintf(stderr, "\n最終出力: %d本の経路\n", routeCount);
-    int greenCount = 0, blueCount = 0, redCount = 0, yellowCount = 0;
-    for (int i = 0; i < routeCount; i++) {
-        if (routes[i].routeType == 0) blueCount++;
-        else if (routes[i].routeType == 1) greenCount++;
-        else if (routes[i].routeType == 2) redCount++;
-        else if (routes[i].routeType == 3) yellowCount++;
-    }
-    fprintf(stderr, "- 青（基準時刻2）: %d本\n", blueCount);
-    fprintf(stderr, "- 緑（基準時刻1）: %d本\n", greenCount);
-    fprintf(stderr, "- 赤（最短全網羅）: %d本\n", redCount);
-    fprintf(stderr, "- 黄（全網羅経路）: %d本\n", yellowCount);
     
     printJSON(routes, routeCount);
 

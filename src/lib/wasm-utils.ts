@@ -123,8 +123,8 @@ export async function runUp44(args: string[]): Promise<void> {
 /**
  * yen.wasmを実行（フォールバック: yens_algorithm）
  */
-export async function runYen(startNode: number, endNode: number, walkingSpeed: number): Promise<string> {
-    const args = [startNode.toString(), endNode.toString(), walkingSpeed.toString()];
+export async function runYen(startNode: number, endNode: number, walkingSpeed: number, phaseShift: number = 0): Promise<string> {
+    const args = [startNode.toString(), endNode.toString(), walkingSpeed.toString(), phaseShift.toString()];
     return await runWasm('yen.wasm', args, 'yens_algorithm');
 }
 

@@ -1,7 +1,9 @@
 /* コストと信号まの待ち時間を計算するAPI */
 
 import { Hono } from 'hono';
-import { runUp44, runYen } from '@/lib/wasm-utils';
+import { execSync } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 
 const calc = new Hono().post('/calc', async (c) => {
     try {
@@ -23,6 +25,7 @@ const calc = new Hono().post('/calc', async (c) => {
             param1,
             param2,
             walkingSpeed: walkingSpeedStr,
+            phaseShift: phaseShiftStr,
         } = body;
 
         const base_args = [
@@ -44,12 +47,20 @@ const calc = new Hono().post('/calc', async (c) => {
         ].join(' ');
 
         const walkingSpeed = parseFloat(walkingSpeedStr || '80');
+        const phaseShift = parseFloat(phaseShiftStr || '0');
         const startNode = param1;
         const endNode = param2;
 
-        // Run up44.wasm once to generate the cost file
+        // Run up44 once to generate the cost file
         try {
-            await runUp44([
+            const projectRoot = process.cwd();
+            const up44Path = path.join(projectRoot, 'up44');
+            
+            if (!fs.existsSync(up44Path)) {
+                return c.json({ error: 'up44バイナリが見つかりません' }, 500);
+            }
+            
+            const up44Args = [
                 weight0,
                 weight1,
                 weight2,
@@ -65,10 +76,16 @@ const calc = new Hono().post('/calc', async (c) => {
                 weight12,
                 param1,
                 param2,
-            ]);
+            ].join(' ');
+            
+            execSync(`./up44 ${up44Args}`, {
+                encoding: 'utf8',
+                cwd: projectRoot,
+                maxBuffer: 10 * 1024 * 1024,
+            });
         } catch (err: any) {
-            console.error(`[up44.wasm実行エラー] ${err.message}`);
-            return c.json({ error: 'up44.wasmの実行に失敗しました' }, 500);
+            console.error(`[up44実行エラー] ${err.message}`);
+            return c.json({ error: 'up44の実行に失敗しました' }, 500);
         }
 
         const startNodeInt = parseInt(startNode || '0', 10);
@@ -78,17 +95,35 @@ const calc = new Hono().post('/calc', async (c) => {
             return c.json({ error: 'Invalid start or end node' }, 400);
         }
 
-        // Use WASM for complete calculation
+        // Use C binary for complete calculation
         const startTime = Date.now();
-        console.log(`[WASM計算] 期待値計算からイェンのアルゴリズムまでWASMで実行中...`);
+        console.log(`[Cバイナリ計算] 期待値計算からイェンのアルゴリズムまでCバイナリで実行中...`);
         const yenStartTime = Date.now();
 
         try {
-            // yen.wasmを実行
-            const cProgramOutput = await runYen(startNodeInt, endNodeInt, walkingSpeed);
+            // yens_algorithmバイナリを実行
+            const projectRoot = process.cwd();
+            const yensAlgorithmPath = path.join(projectRoot, 'yens_algorithm');
+            
+            if (!fs.existsSync(yensAlgorithmPath)) {
+                return c.json({ error: 'yens_algorithmバイナリが見つかりません' }, 500);
+            }
+            
+            const yensArgs = [
+                startNodeInt.toString(),
+                endNodeInt.toString(),
+                walkingSpeed.toString(),
+                phaseShift.toString(),
+            ].join(' ');
+            
+            const cProgramOutput = execSync(`./yens_algorithm ${yensArgs}`, {
+                encoding: 'utf8',
+                cwd: projectRoot,
+                maxBuffer: 10 * 1024 * 1024,
+            });
 
             const yenTime = Date.now() - yenStartTime;
-            console.log(`[WASM計算完了] ${(yenTime / 1000).toFixed(2)}秒`);
+            console.log(`[Cバイナリ計算完了] ${(yenTime / 1000).toFixed(2)}秒`);
 
             // JSONをパース
             const top5Routes = JSON.parse(cProgramOutput);
@@ -98,7 +133,7 @@ const calc = new Hono().post('/calc', async (c) => {
             }
 
             const totalTime = Date.now() - startTime;
-            console.log(`[最終結果] WASM計算: ${top5Routes.length}件の経路を発見`);
+            console.log(`[最終結果] Cバイナリ計算: ${top5Routes.length}件の経路を発見`);
             console.log(`[最終結果] 上位${top5Routes.length}件の経路を選択`);
             top5Routes.forEach((route: any, index: number) => {
                 console.log(
@@ -114,13 +149,15 @@ const calc = new Hono().post('/calc', async (c) => {
                     2
                 )}分）`
             );
-            console.log(`[処理時間内訳] WASM計算: ${(yenTime / 1000).toFixed(2)}秒`);
+            console.log(`[処理時間内訳] Cバイナリ計算: ${(yenTime / 1000).toFixed(2)}秒`);
 
             return c.json(top5Routes);
         } catch (cErr: any) {
-            console.error(`[WASM実行エラー] ${cErr.message}`);
-            console.error(`[WASM実行エラー詳細] ${cErr.stderr || cErr.stdout || ''}`);
-            return c.json({ error: 'WASMプログラムの実行に失敗しました' }, 500);
+            console.error(`[Cバイナリ実行エラー] ${cErr.message}`);
+            const stderr = cErr.stderr?.toString() || '';
+            const stdout = cErr.stdout?.toString() || '';
+            console.error(`[Cバイナリ実行エラー詳細] stderr: ${stderr}, stdout: ${stdout}`);
+            return c.json({ error: 'Cバイナリプログラムの実行に失敗しました' }, 500);
         }
     } catch (err: any) {
         console.error(`実行エラー詳細: ${err.message}`);

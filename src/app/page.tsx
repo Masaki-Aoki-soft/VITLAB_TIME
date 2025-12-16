@@ -50,6 +50,7 @@ export default function Home() {
         param1: '1',
         param2: '246',
         walkingSpeed: '80',
+        phaseShift: '0',
     });
 
     const mapRef = useRef<any>(null);
@@ -128,6 +129,7 @@ export default function Home() {
                 json: {
                     param1: params.param1,
                     param2: params.param2,
+                    phaseShift: params.phaseShift,
                     weight0: weights.weight0.toString(),
                     weight1: weights.weight1.toString(),
                     weight2: weights.weight2.toString(),
@@ -1209,6 +1211,7 @@ export default function Home() {
                 json: {
                     param1: '194', // 194から
                     param2: params.param2, // ゴールまで
+                    phaseShift: params.phaseShift,
                     weight0: weights.weight0.toString(),
                     weight1: weights.weight1.toString(),
                     weight2: weights.weight2.toString(),
@@ -1699,6 +1702,31 @@ export default function Home() {
                                     >
                                         <i className="fas fa-trash"></i>クリア
                                     </button>
+                                </div>
+                            </div>
+                            <div className="glass-effect rounded-xl p-4 flex flex-col">
+                                <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
+                                    <i className="fas fa-clock text-yellow-300"></i>
+                                    信号位相シフト
+                                </h3>
+                                <div>
+                                    <label className="block text-white/90 text-sm font-medium mb-2">
+                                        位相シフト (秒)
+                                    </label>
+                                    <input
+                                        type="number"
+                                        value={params.phaseShift}
+                                        onChange={(e) =>
+                                            setParams({ ...params, phaseShift: e.target.value })
+                                        }
+                                        disabled={isLoading}
+                                        className="w-full pl-2 rounded-lg bg-white/20 text-white border border-white/30 placeholder-white/50 focus:border-yellow-300 focus:outline-none transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
+                                        placeholder="例: 0"
+                                        step="0.1"
+                                    />
+                                    <p className="text-white/70 text-xs mt-2">
+                                        全ての信号の位相を指定した秒数だけずらします（デフォルト: 0秒）
+                                    </p>
                                 </div>
                             </div>
                         </div>
