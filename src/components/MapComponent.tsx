@@ -103,6 +103,8 @@ interface MapComponentProps {
     pinSelectionState?: 'none' | 'start' | 'end';
     onSlider194_195Change?: (distance: number, sliderType: number) => void;
     onShowSlider194_195?: () => void;
+    slider194_195VisibleRef?: React.MutableRefObject<boolean>;
+    slider194_195CreatingRef?: React.MutableRefObject<boolean>;
 }
 
 // マップイベントを処理するコンポーネント
@@ -118,7 +120,17 @@ function MapEvents({ onMapClick }: { onMapClick?: (lat: number, lng: number) => 
 }
 
 // マップインスタンスを更新するコンポーネント
-function MapUpdater({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }) {
+function MapUpdater({
+    mapRef,
+    onShowSlider194_195,
+    slider194_195VisibleRef,
+    slider194_195CreatingRef,
+}: {
+    mapRef: React.MutableRefObject<L.Map | null>;
+    onShowSlider194_195?: () => void;
+    slider194_195VisibleRef?: React.MutableRefObject<boolean>;
+    slider194_195CreatingRef?: React.MutableRefObject<boolean>;
+}) {
     const map = useMap();
 
     useEffect(() => {
@@ -128,6 +140,41 @@ function MapUpdater({ mapRef }: { mapRef: React.MutableRefObject<L.Map | null> }
             map.invalidateSize();
         }, 100);
     }, [map, mapRef]);
+
+    // ズーム変更時にスライダーを再描画
+    useEffect(() => {
+        if (!onShowSlider194_195 || !slider194_195VisibleRef || !slider194_195CreatingRef) return;
+
+        const handleZoomEnd = () => {
+            if (slider194_195VisibleRef.current && !slider194_195CreatingRef.current) {
+                // ズーム終了後に再描画
+                setTimeout(() => {
+                    if (slider194_195VisibleRef.current && !slider194_195CreatingRef.current) {
+                        onShowSlider194_195();
+                    }
+                }, 100);
+            }
+        };
+
+        const handleMoveEnd = () => {
+            if (slider194_195VisibleRef.current && !slider194_195CreatingRef.current) {
+                // 移動終了後に再描画
+                setTimeout(() => {
+                    if (slider194_195VisibleRef.current && !slider194_195CreatingRef.current) {
+                        onShowSlider194_195();
+                    }
+                }, 100);
+            }
+        };
+
+        map.on('zoomend', handleZoomEnd);
+        map.on('moveend', handleMoveEnd);
+
+        return () => {
+            map.off('zoomend', handleZoomEnd);
+            map.off('moveend', handleMoveEnd);
+        };
+    }, [map, onShowSlider194_195, slider194_195VisibleRef, slider194_195CreatingRef]);
 
     return null;
 }
@@ -221,6 +268,8 @@ export default function MapComponent({
     pinSelectionState = 'none',
     onSlider194_195Change,
     onShowSlider194_195,
+    slider194_195VisibleRef,
+    slider194_195CreatingRef,
 }: MapComponentProps) {
     const [parameterMarkers, setParameterMarkers] = useState<L.Marker[]>([]);
     const parameterMarkersRef = useRef<L.Marker[]>([]);
@@ -324,7 +373,12 @@ export default function MapComponent({
                     url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
                     attribution='© <a href="http://osm.org/copyright">OpenStreetMap</a> contributors, <a href="http://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>'
                 />
-                <MapUpdater mapRef={mapRef} />
+                <MapUpdater
+                    mapRef={mapRef}
+                    onShowSlider194_195={onShowSlider194_195}
+                    slider194_195VisibleRef={slider194_195VisibleRef}
+                    slider194_195CreatingRef={slider194_195CreatingRef}
+                />
                 {onMapClick && <MapEvents onMapClick={onMapClick} />}
                 {routeLayers.map((layer, index) => (
                     <GeoJSON

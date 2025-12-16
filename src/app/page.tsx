@@ -3,7 +3,7 @@
 // SSRを無効化（windowオブジェクトを使用するため）
 export const dynamic = 'force-dynamic';
 
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import dynamicImport from 'next/dynamic';
 import toast from 'react-hot-toast';
 import RouteInfo from '@/components/RouteInfo';
@@ -61,6 +61,7 @@ export default function Home() {
     const slider194_195ValuesRef = useRef<Map<string, number>>(new Map());
     const slider194_195VisibleRef = useRef<boolean>(false);
     const slider194_195CreatingRef = useRef<boolean>(false); // 作成中フラグ
+    const zoomTimeoutRef = useRef<NodeJS.Timeout | null>(null); // ズーム時のデバウンス用
     const [selectedRouteInfo, setSelectedRouteInfo] = useState<RouteResult | null>(null);
     const [startMarker, setStartMarker] = useState<{
         position: [number, number];
@@ -679,12 +680,20 @@ export default function Home() {
     };
 
     // 194-195にスライダーを表示する関数（page.tsx内で直接管理）
-    const showSliderOn194_195 = async () => {
+    const showSliderOn194_195 = useCallback(async () => {
         // ブラウザ環境でのみ実行
         if (typeof window === 'undefined') return;
         
-        // 既に作成中または既に表示されている場合はスキップ
-        if (slider194_195CreatingRef.current) return;
+        // 既に作成中の場合は、少し待ってから再試行
+        if (slider194_195CreatingRef.current) {
+            // 100ms後に再試行（ズーム中などで連続呼び出しされる場合に対応）
+            setTimeout(() => {
+                if (!slider194_195CreatingRef.current && slider194_195VisibleRef.current) {
+                    showSliderOn194_195();
+                }
+            }, 100);
+            return;
+        }
         slider194_195CreatingRef.current = true;
         
         try {
@@ -1162,7 +1171,7 @@ export default function Home() {
         } finally {
             slider194_195CreatingRef.current = false;
         }
-    };
+    }, []);
 
     // 194-195のスライダー変更時の処理
     const handleSlider194_195Change = async (distance: number, sliderType: number) => {
@@ -1276,25 +1285,7 @@ export default function Home() {
         }
     };
 
-    // ズーム変更時にスライダーを再描画
-    useEffect(() => {
-        const map = mapRef.current;
-        if (!map) return;
-
-        const handleZoomEnd = () => {
-            if (slider194_195VisibleRef.current) {
-                showSliderOn194_195();
-            }
-        };
-
-        map.on('zoomend', handleZoomEnd);
-        map.on('moveend', handleZoomEnd);
-
-        return () => {
-            map.off('zoomend', handleZoomEnd);
-            map.off('moveend', handleZoomEnd);
-        };
-    }, []);
+    // ズーム変更時の処理はMapUpdaterコンポーネント内で行う
 
     // 初期化
     useEffect(() => {
@@ -1678,6 +1669,8 @@ export default function Home() {
                                 pinSelectionState={pinSelectionState}
                                 onSlider194_195Change={handleSlider194_195Change}
                                 onShowSlider194_195={showSliderOn194_195}
+                                slider194_195VisibleRef={slider194_195VisibleRef}
+                                slider194_195CreatingRef={slider194_195CreatingRef}
                             />
                             <div className="glass-effect rounded-xl p-4 flex flex-col">
                                 <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
