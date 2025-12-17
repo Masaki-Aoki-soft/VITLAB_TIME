@@ -10,6 +10,9 @@ const static_route = new Hono().get('/*', async (c) => {
         const routePath = c.req.path.replace(/^\/api\/main_server_route\/static\/?/, '');
         const pathSegments = routePath.split('/').filter(Boolean);
         const filePath = path.join(process.cwd(), ...pathSegments);
+        
+        // デバッグログ
+        console.log(`[静的ファイル] リクエストパス: ${c.req.path}, routePath: ${routePath}, filePath: ${filePath}`);
 
         // セキュリティチェック：プロジェクトルート外へのアクセスを防ぐ
         const resolvedPath = path.resolve(filePath);
@@ -19,7 +22,10 @@ const static_route = new Hono().get('/*', async (c) => {
         }
 
         if (!fs.existsSync(filePath)) {
-            return c.json({ error: 'Not Found' }, 404);
+            console.error(`[静的ファイル] ファイルが見つかりません: ${filePath}`);
+            console.error(`[静的ファイル] process.cwd(): ${process.cwd()}`);
+            console.error(`[静的ファイル] 解決されたパス: ${resolvedPath}`);
+            return c.json({ error: 'Not Found', filePath, resolvedPath, cwd: process.cwd() }, 404);
         }
 
         const stats = fs.statSync(filePath);
@@ -28,7 +34,12 @@ const static_route = new Hono().get('/*', async (c) => {
         }
 
         const fileContent = fs.readFileSync(filePath);
-        const mimeType = mime.lookup(filePath) || 'application/octet-stream';
+        let mimeType = mime.lookup(filePath) || 'application/octet-stream';
+        
+        // テキストファイルの場合は明示的にtext/plainを設定
+        if (filePath.endsWith('.txt')) {
+            mimeType = 'text/plain; charset=utf-8';
+        }
 
         return c.body(fileContent, 200, {
             'Content-Type': mimeType,

@@ -53,7 +53,9 @@ export default function Home() {
     });
 
     const mapRef = useRef<any>(null);
-    const [routeLayers, setRouteLayers] = useState<Array<{ data: any; style: any; routeInfo?: RouteResult }>>([]);
+    const [routeLayers, setRouteLayers] = useState<
+        Array<{ data: any; style: any; routeInfo?: RouteResult }>
+    >([]);
     const [dataLayers, setDataLayers] = useState<
         Array<{ data: any; style: any; popup?: string; edgeName?: string }>
     >([]);
@@ -61,6 +63,10 @@ export default function Home() {
     const slider194_195ValuesRef = useRef<Map<string, number>>(new Map());
     const slider194_195VisibleRef = useRef<boolean>(false);
     const slider194_195CreatingRef = useRef<boolean>(false); // 作成中フラグ
+    const slider194_195TypeRef = useRef<'blue' | 'red'>('blue'); // 表示中のスライダータイプ
+    const [slider194_195Type, setSlider194_195Type] = useState<'blue' | 'red'>('blue'); // 表示中のスライダータイプ（UI更新用）
+    const slider194_195ClickCountRef = useRef<number>(0); // クリック回数をカウント
+    const slider194_195RouteLayerRef = useRef<L.GeoJSON | null>(null); // 194-195の経路レイヤー
     const zoomTimeoutRef = useRef<NodeJS.Timeout | null>(null); // ズーム時のデバウンス用
     const [selectedRouteInfo, setSelectedRouteInfo] = useState<RouteResult | null>(null);
     const [startMarker, setStartMarker] = useState<{
@@ -74,10 +80,12 @@ export default function Home() {
         nodeId: string;
     } | null>(null);
     const [showIntersectionPins, setShowIntersectionPins] = useState(false);
-    const [intersectionPins, setIntersectionPins] = useState<Array<{
-        position: [number, number];
-        nodeId: string;
-    }>>([]);
+    const [intersectionPins, setIntersectionPins] = useState<
+        Array<{
+            position: [number, number];
+            nodeId: string;
+        }>
+    >([]);
     const [pinSelectionState, setPinSelectionState] = useState<'none' | 'start' | 'end'>('none');
     const geojsonFeaturesRef = useRef<any[]>([]);
     const geojsonFileNamesRef = useRef<Array<string>>([]);
@@ -604,6 +612,51 @@ export default function Home() {
         setBestEnumRoute(null);
         setFoundRoutes([]);
         setCurrentRouteIndex(0);
+
+        // 194-195のスライダーと紫色の経路を削除
+        const map = mapRef.current;
+        if (map) {
+            // 194-195のスライダーマーカーを削除
+            slider194_195MarkersRef.current.forEach((marker) => {
+                try {
+                    if (map.hasLayer(marker)) {
+                        map.removeLayer(marker);
+                    }
+                    // クリーンアップ関数があれば実行
+                    if ((marker as any)._cleanupEvents) {
+                        (marker as any)._cleanupEvents();
+                    }
+                } catch (e) {
+                    console.warn('スライダーマーカーの削除でエラー:', e);
+                }
+            });
+            slider194_195MarkersRef.current = [];
+
+            // 194-195の紫色の経路レイヤーを削除
+            if (slider194_195RouteLayerRef.current) {
+                try {
+                    const routeLayer = slider194_195RouteLayerRef.current;
+                    if (map.hasLayer(routeLayer)) {
+                        map.removeLayer(routeLayer);
+                    }
+                } catch (e) {
+                    console.warn('経路レイヤーの削除でエラー:', e);
+                }
+                slider194_195RouteLayerRef.current = null;
+            }
+
+            // 切り替えボタンを削除
+            const toggleButton = document.getElementById('194-195-toggle-button');
+            if (toggleButton) {
+                toggleButton.remove();
+            }
+
+            // スライダーの値をリセット
+            slider194_195ValuesRef.current.clear();
+            slider194_195VisibleRef.current = false;
+            slider194_195TypeRef.current = 'blue';
+            setSlider194_195Type('blue');
+        }
     };
 
     // パラメータ変更時にマーカーを更新
@@ -683,7 +736,7 @@ export default function Home() {
     const showSliderOn194_195 = useCallback(async () => {
         // ブラウザ環境でのみ実行
         if (typeof window === 'undefined') return;
-        
+
         // 既に作成中の場合は、少し待ってから再試行
         if (slider194_195CreatingRef.current) {
             // 100ms後に再試行（ズーム中などで連続呼び出しされる場合に対応）
@@ -695,7 +748,7 @@ export default function Home() {
             return;
         }
         slider194_195CreatingRef.current = true;
-        
+
         try {
             const map = mapRef.current;
             if (!map) {
@@ -707,12 +760,12 @@ export default function Home() {
             const L = await import('leaflet');
 
             const edgeDistance = 48.86; // 194-195の距離（メートル）
-            const maxValue = Math.floor(edgeDistance); // 1mごとに分割（0-48m）
+            const maxValue = 47; // 48段階（0-47）
 
             // 既存の194-195スライダーマーカーを削除（重複防止）
             const slider1Id = '194-195-slider-1';
             const slider2Id = '194-195-slider-2';
-            
+
             // 既存のマーカーを削除
             slider194_195MarkersRef.current.forEach((marker) => {
                 try {
@@ -726,7 +779,17 @@ export default function Home() {
                 }
             });
             slider194_195MarkersRef.current = [];
-            
+
+            // 既存の194-195経路レイヤーを削除
+            if (slider194_195RouteLayerRef.current) {
+                try {
+                    map.removeLayer(slider194_195RouteLayerRef.current);
+                } catch (e) {
+                    // 既に削除されている場合は無視
+                }
+                slider194_195RouteLayerRef.current = null;
+            }
+
             // 既存のDOM要素も削除（重複防止）
             const existingSlider1 = document.getElementById(slider1Id);
             if (existingSlider1 && existingSlider1.parentNode) {
@@ -736,9 +799,15 @@ export default function Home() {
             if (existingSlider2 && existingSlider2.parentNode) {
                 existingSlider2.parentNode.removeChild(existingSlider2);
             }
-            
+
+            // 既存の切り替えボタンを削除
+            const existingToggleButton = document.getElementById('194-195-toggle-button');
+            if (existingToggleButton) {
+                existingToggleButton.remove();
+            }
+
             // 少し待ってから新しいスライダーを作成（DOMのクリーンアップを確実に）
-            await new Promise(resolve => setTimeout(resolve, 50));
+            await new Promise((resolve) => setTimeout(resolve, 50));
 
             // 194-195のGeoJSONを読み込む
             const geojsonPath = '/api/main_server_route/static/oomiya_line/194-195.geojson';
@@ -776,25 +845,18 @@ export default function Home() {
                 (startPoint.lng + endPoint.lng) / 2
             );
 
-            // 垂直方向の角度（経路の両側に配置）
+            // 垂直方向の角度（経路の上側に配置）
             const perpendicularAngle = angle + 90;
             const offsetPixels = 15; // 経路から少し離す（視認性のため）
             const offsetAngleRad = (perpendicularAngle * Math.PI) / 180;
             const centerPixel = map.latLngToContainerPoint(centerPoint);
 
-            // 1つ目のスライダーの位置（経路の上側、青と白）
+            // スライダーの位置（青色と赤色を同じ位置に配置）
             const offset1Pixel = L.default.point(
                 centerPixel.x + Math.cos(offsetAngleRad) * offsetPixels,
                 centerPixel.y + Math.sin(offsetAngleRad) * offsetPixels
             );
-            const slider1Position = map.containerPointToLatLng(offset1Pixel);
-
-            // 2つ目のスライダーの位置（経路の下側、赤と白）
-            const offset2Pixel = L.default.point(
-                centerPixel.x - Math.cos(offsetAngleRad) * offsetPixels,
-                centerPixel.y - Math.sin(offsetAngleRad) * offsetPixels
-            );
-            const slider2Position = map.containerPointToLatLng(offset2Pixel);
+            const sliderPosition = map.containerPointToLatLng(offset1Pixel);
 
             // スライダーの値（1つ目と2つ目で独立）
             const slider1Key = '194-195-slider1';
@@ -944,13 +1006,13 @@ export default function Home() {
                 iconAnchor: [sliderWidth / 2, 10],
             });
 
-            // マーカーを作成
-            const slider1Marker = L.default.marker(slider1Position, {
+            // マーカーを作成（同じ位置に配置）
+            const slider1Marker = L.default.marker(sliderPosition, {
                 icon: slider1DivIcon,
                 interactive: true,
             });
 
-            const slider2Marker = L.default.marker(slider2Position, {
+            const slider2Marker = L.default.marker(sliderPosition, {
                 icon: slider2DivIcon,
                 interactive: true,
             });
@@ -970,7 +1032,7 @@ export default function Home() {
                 setTimeout(() => {
                     const sliderElement = document.getElementById(slider1Id) as HTMLInputElement;
                     if (!sliderElement) return;
-                    
+
                     let isDragging = false;
 
                     const disableMapDragging = () => {
@@ -1015,7 +1077,7 @@ export default function Home() {
                     sliderElement.removeEventListener('mousemove', handleMouseMove);
                     sliderElement.removeEventListener('mouseup', handleMouseUp);
                     sliderElement.removeEventListener('mouseleave', handleMouseLeave);
-                    
+
                     sliderElement.addEventListener('mousedown', handleMouseDown, true);
                     sliderElement.addEventListener('mousemove', handleMouseMove, true);
                     sliderElement.addEventListener('mouseup', handleMouseUp, true);
@@ -1032,11 +1094,11 @@ export default function Home() {
                         isDragging = false;
                         enableMapDragging();
                     };
-                    
+
                     // グローバルイベントリスナーを追加
                     document.addEventListener('mousemove', globalMouseMove, true);
                     document.addEventListener('mouseup', globalMouseUp, true);
-                    
+
                     // クリーンアップ関数を保存（マーカーが削除される際に呼び出す）
                     (slider1Marker as any)._cleanupEvents = () => {
                         document.removeEventListener('mousemove', globalMouseMove, true);
@@ -1068,7 +1130,7 @@ export default function Home() {
                 setTimeout(() => {
                     const sliderElement = document.getElementById(slider2Id) as HTMLInputElement;
                     if (!sliderElement) return;
-                    
+
                     let isDragging = false;
 
                     const disableMapDragging = () => {
@@ -1113,7 +1175,7 @@ export default function Home() {
                     sliderElement.removeEventListener('mousemove', handleMouseMove);
                     sliderElement.removeEventListener('mouseup', handleMouseUp);
                     sliderElement.removeEventListener('mouseleave', handleMouseLeave);
-                    
+
                     sliderElement.addEventListener('mousedown', handleMouseDown, true);
                     sliderElement.addEventListener('mousemove', handleMouseMove, true);
                     sliderElement.addEventListener('mouseup', handleMouseUp, true);
@@ -1130,11 +1192,11 @@ export default function Home() {
                         isDragging = false;
                         enableMapDragging();
                     };
-                    
+
                     // グローバルイベントリスナーを追加
                     document.addEventListener('mousemove', globalMouseMove, true);
                     document.addEventListener('mouseup', globalMouseUp, true);
-                    
+
                     // クリーンアップ関数を保存（マーカーが削除される際に呼び出す）
                     (slider2Marker as any)._cleanupEvents = () => {
                         document.removeEventListener('mousemove', globalMouseMove, true);
@@ -1148,6 +1210,7 @@ export default function Home() {
                     sliderElement.addEventListener('input', (e) => {
                         e.stopPropagation();
                         const value = parseInt((e.target as HTMLInputElement).value);
+                        console.log(`[スライダー2 input] value: ${value}`);
                         slider194_195ValuesRef.current.set(slider2Key, value);
                         handleSlider194_195Change(value, 2);
                     });
@@ -1155,16 +1218,111 @@ export default function Home() {
                     sliderElement.addEventListener('change', (e) => {
                         e.stopPropagation();
                         const value = parseInt((e.target as HTMLInputElement).value);
+                        console.log(`[スライダー2 change] value: ${value}`);
                         slider194_195ValuesRef.current.set(slider2Key, value);
                         handleSlider194_195Change(value, 2);
                     });
                 }, 100);
             });
 
+            // 初期状態は青色を表示
             slider1Marker.addTo(map);
-            slider2Marker.addTo(map);
             slider194_195MarkersRef.current.push(slider1Marker, slider2Marker);
             slider194_195VisibleRef.current = true;
+            slider194_195TypeRef.current = 'blue';
+            setSlider194_195Type('blue');
+
+            // 初期値の経路を表示
+            const initialValue = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
+            handleSlider194_195Change(initialValue, 1);
+
+            // 左上に切り替えボタンを追加
+            const toggleButtonId = '194-195-toggle-button';
+            const toggleButtonContainer = document.createElement('div');
+            toggleButtonContainer.id = toggleButtonId;
+            toggleButtonContainer.style.cssText = `
+                position: absolute;
+                top: 10px;
+                left: 50px;
+                z-index: 1000;
+                pointer-events: auto;
+            `;
+
+            const toggleButton = document.createElement('button');
+            toggleButton.textContent = '赤色に切り替え';
+            toggleButton.style.cssText = `
+                background: #ef4444;
+                color: white;
+                border: none;
+                border-radius: 4px;
+                padding: 8px 16px;
+                font-size: 12px;
+                cursor: pointer;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                font-weight: bold;
+            `;
+            toggleButton.onmouseover = () => {
+                toggleButton.style.background = '#dc2626';
+            };
+            toggleButton.onmouseout = () => {
+                toggleButton.style.background =
+                    slider194_195TypeRef.current === 'blue' ? '#ef4444' : '#3b82f6';
+            };
+
+            // ボタンのクリックイベント
+            toggleButton.addEventListener('click', (e) => {
+                e.stopPropagation();
+                e.preventDefault();
+
+                if (slider194_195TypeRef.current === 'blue') {
+                    // 青色から赤色に切り替え
+                    if (map.hasLayer(slider1Marker)) {
+                        map.removeLayer(slider1Marker);
+                    }
+                    if (!map.hasLayer(slider2Marker)) {
+                        slider2Marker.addTo(map);
+                    }
+                    slider194_195TypeRef.current = 'red';
+                    setSlider194_195Type('red');
+                    toggleButton.textContent = '青色に切り替え';
+                    toggleButton.style.background = '#3b82f6';
+
+                    // 赤色のスライダー値で経路を更新
+                    const slider2Key = '194-195-slider2';
+                    const currentValue2 = slider194_195ValuesRef.current.get(slider2Key) ?? 0;
+                    handleSlider194_195Change(currentValue2, 2);
+                } else {
+                    // 赤色から青色に切り替え
+                    if (map.hasLayer(slider2Marker)) {
+                        map.removeLayer(slider2Marker);
+                    }
+                    if (!map.hasLayer(slider1Marker)) {
+                        slider1Marker.addTo(map);
+                    }
+                    slider194_195TypeRef.current = 'blue';
+                    setSlider194_195Type('blue');
+                    toggleButton.textContent = '赤色に切り替え';
+                    toggleButton.style.background = '#ef4444';
+
+                    // 青色のスライダー値で経路を更新
+                    const slider1Key = '194-195-slider1';
+                    const currentValue1 = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
+                    handleSlider194_195Change(currentValue1, 1);
+                }
+            });
+
+            toggleButtonContainer.appendChild(toggleButton);
+
+            // マップコンテナにボタンを追加
+            const mapContainer = map.getContainer();
+            if (mapContainer) {
+                // 既存のボタンを削除
+                const existingButton = document.getElementById(toggleButtonId);
+                if (existingButton) {
+                    existingButton.remove();
+                }
+                mapContainer.appendChild(toggleButtonContainer);
+            }
         } catch (error) {
             console.error('194-195のスライダー表示エラー:', error);
             slider194_195VisibleRef.current = false;
@@ -1175,113 +1333,138 @@ export default function Home() {
 
     // 194-195のスライダー変更時の処理
     const handleSlider194_195Change = async (distance: number, sliderType: number) => {
-        if (!endMarker) {
-            console.warn('終点が設定されていません');
+        const map = mapRef.current;
+        if (!map) {
+            console.warn('マップが初期化されていません');
             return;
         }
 
-        setIsLoading(true);
+        console.log(`[スライダー変更] distance: ${distance}, sliderType: ${sliderType}`);
+
+        // スライダー値からファイル番号を計算（0→48、1→47、...、47→1）
+        const fileNumber = 48 - Math.floor(distance);
+        const sliderTypeName = sliderType === 1 ? 'blue' : 'red';
+        const directory = sliderType === 1 ? '194-195_green' : '194-195_red';
+        const fileName = `${fileNumber}.txt`;
+
+        console.log(
+            `[ファイル読み込み] ファイル番号: ${fileNumber}, ディレクトリ: ${directory}, ファイル名: ${fileName}`
+        );
+
         try {
-            // 194-195を通過する時間を計算（距離/歩行速度、分単位）
-            const walkingSpeed = parseFloat(params.walkingSpeed || '80'); // m/分
-            const travelTimeMinutes = distance / walkingSpeed;
-
-            // 信号の待ち時間を計算（25-195の信号情報を使用）
-            // signal_inf.csvから: cycle=51.91, green=23.87, phase=14.99
-            const signalCycle = 51.91; // 秒
-            const signalGreen = 23.87; // 秒
-            const signalPhase = 14.99; // 秒
-
-            // 累積時間（秒）
-            const cumulativeTimeSeconds = travelTimeMinutes * 60;
-            
-            // 信号サイクル内での到着時刻を計算
-            const timeIntoCycle = ((cumulativeTimeSeconds - signalPhase + signalCycle) % signalCycle);
-            
-            // 待ち時間を計算（グリーン時間を過ぎていたら待つ）
-            let waitTimeSeconds = 0;
-            if (timeIntoCycle > signalGreen) {
-                waitTimeSeconds = signalCycle - timeIntoCycle;
-            }
-
-            // 194からゴールまでの経路を計算
-            const response = await client.api.main_server_route.calc.$post({
-                json: {
-                    param1: '194', // 194から
-                    param2: params.param2, // ゴールまで
-                    weight0: weights.weight0.toString(),
-                    weight1: weights.weight1.toString(),
-                    weight2: weights.weight2.toString(),
-                    weight3: weights.weight3.toString(),
-                    weight4: weights.weight4.toString(),
-                    weight5: weights.weight5.toString(),
-                    weight6: weights.weight6.toString(),
-                    weight7: weights.weight7.toString(),
-                    weight8: weights.weight8.toString(),
-                    weight9: weights.weight9.toString(),
-                    weight10: weights.weight10.toString(),
-                    weight11: weights.weight11.toString(),
-                    weight12: weights.weight12.toString(),
-                    walkingSpeed: params.walkingSpeed,
-                },
-            });
-
-            if (!response.ok) {
-                const err = await response.json();
-                const errorMessage = (err && typeof err === 'object' && 'error' in err) 
-                    ? err.error 
-                    : `HTTP error! status: ${response.status}`;
-                throw new Error(errorMessage);
-            }
-
-            const output: any = await response.json();
-            if (Array.isArray(output) && output.length > 0) {
-                // 最短経路を取得
-                const shortestRoute: RouteResult = output[0];
-                
-                // 待ち時間を加算
-                shortestRoute.totalWaitTime = (shortestRoute.totalWaitTime || 0) + waitTimeSeconds / 60;
-                shortestRoute.totalTime = (shortestRoute.totalTime || 0) + waitTimeSeconds / 60;
-
-                // 経路を描画
-                const geojsonFolder = 'oomiya_line/';
-                const routeColor = sliderType === 1 ? '#3b82f6' : '#ef4444'; // 1: 青, 2: 赤
-
-                const newLayers: Array<{ data: any; style: any; routeInfo?: RouteResult }> = [...routeLayers];
-                
-                const userPrefString: string = shortestRoute.userPref || '';
-                const segments: string[] = userPrefString
-                    .split('\n')
-                    .filter((line: string) => line.trim() !== '');
-
-                for (const filename of segments) {
-                    try {
-                        const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
-                        const res = await fetch(filePath);
-                        if (!res.ok) continue;
-                        const data = await res.json();
-                        newLayers.push({
-                            data,
-                            style: {
-                                color: routeColor,
-                                weight: 8,
-                                opacity: 0.8,
-                            },
-                            routeInfo: shortestRoute,
-                        });
-                    } catch (err) {
-                        console.warn(`Error loading ${filename}:`, err);
+            // 既存の194-195経路レイヤーを確実に削除
+            if (slider194_195RouteLayerRef.current) {
+                try {
+                    const oldLayer = slider194_195RouteLayerRef.current;
+                    if (map.hasLayer(oldLayer)) {
+                        map.removeLayer(oldLayer);
+                        console.log('[既存レイヤー削除] レイヤーを削除しました');
                     }
+                } catch (e) {
+                    console.warn('既存レイヤーの削除でエラー:', e);
+                }
+                slider194_195RouteLayerRef.current = null;
+            }
+
+            // テキストファイルを読み込む
+            const textFilePath = `/api/main_server_route/static/${directory}/${fileName}`;
+            console.log(`[テキストファイル読み込み] ${textFilePath}`);
+            const textResponse = await fetch(textFilePath);
+            if (!textResponse.ok) {
+                let errorData: any = {};
+                try {
+                    errorData = await textResponse.json();
+                } catch {
+                    errorData = { error: await textResponse.text().catch(() => '') };
+                }
+                console.error(
+                    `ファイルが見つかりません: ${textFilePath}, status: ${textResponse.status}`,
+                    errorData
+                );
+                return;
+            }
+
+            const textContent = await textResponse.text();
+            console.log(`[テキスト内容] ${textContent.substring(0, 100)}...`);
+            const geojsonFileNames = textContent
+                .split('\n')
+                .map((line) => line.trim())
+                .filter((line) => line !== '' && line.endsWith('.geojson'));
+
+            console.log(`[GeoJSONファイル数] ${geojsonFileNames.length}個`);
+
+            // Leafletを動的にインポート
+            const L = await import('leaflet');
+
+            // 全てのGeoJSONファイルを読み込んで結合
+            const geojsonFeatures: any[] = [];
+            const geojsonFolder = 'oomiya_line/';
+
+            for (const geojsonFileName of geojsonFileNames) {
+                try {
+                    const geojsonPath = `/api/main_server_route/static/${geojsonFolder}${geojsonFileName}`;
+                    console.log(`[GeoJSON読み込み] ${geojsonPath}`);
+                    const geojsonResponse = await fetch(geojsonPath);
+                    if (!geojsonResponse.ok) {
+                        const errorData = await geojsonResponse
+                            .json()
+                            .catch(() => ({ error: 'Unknown error' }));
+                        console.warn(
+                            `GeoJSONファイルが見つかりません: ${geojsonPath}, status: ${geojsonResponse.status}`,
+                            errorData
+                        );
+                        continue;
+                    }
+                    const geojsonData = await geojsonResponse.json();
+                    if (geojsonData.type === 'Feature') {
+                        geojsonFeatures.push(geojsonData);
+                        console.log(`[GeoJSON追加] ${geojsonFileName} (Feature)`);
+                    } else if (geojsonData.type === 'FeatureCollection') {
+                        geojsonFeatures.push(...geojsonData.features);
+                        console.log(
+                            `[GeoJSON追加] ${geojsonFileName} (FeatureCollection, ${geojsonData.features.length} features)`
+                        );
+                    }
+                } catch (err) {
+                    console.warn(`Error loading ${geojsonFileName}:`, err);
+                }
+            }
+
+            console.log(`[読み込んだFeature数] ${geojsonFeatures.length}個`);
+
+            if (geojsonFeatures.length > 0) {
+                // 念のため、既存のレイヤーが残っていないか再度確認して削除
+                if (slider194_195RouteLayerRef.current) {
+                    try {
+                        const oldLayer = slider194_195RouteLayerRef.current;
+                        if (map.hasLayer(oldLayer)) {
+                            map.removeLayer(oldLayer);
+                            console.log('[既存レイヤー削除（再確認）] レイヤーを削除しました');
+                        }
+                    } catch (e) {
+                        console.warn('既存レイヤーの削除（再確認）でエラー:', e);
+                    }
+                    slider194_195RouteLayerRef.current = null;
                 }
 
-                setRouteLayers(newLayers);
-                toast.success(`距離${distance}mでの経路を表示しました`);
+                // GeoJSONレイヤーを作成（紫色で表示）
+                const routeLayer = L.default.geoJSON(geojsonFeatures, {
+                    style: {
+                        color: '#9333ea', // 紫色
+                        weight: 8,
+                        opacity: 0.8,
+                    },
+                });
+
+                routeLayer.addTo(map);
+                slider194_195RouteLayerRef.current = routeLayer;
+                console.log('[経路レイヤー追加完了]');
+            } else {
+                console.warn('[警告] 読み込んだFeatureが0個です');
             }
         } catch (error: any) {
-            console.error('経路計算エラー:', error);
-            toast.error(error.message || '経路計算に失敗しました');
-        } finally {
-            setIsLoading(false);
+            console.error('経路読み込みエラー:', error);
+            console.error('エラー詳細:', error.message, error.stack);
         }
     };
 
@@ -1458,8 +1641,10 @@ export default function Home() {
                                     </button>
                                     {showIntersectionPins && (
                                         <div className="text-white/80 text-xs text-center">
-                                            {pinSelectionState === 'start' && '始点を選択してください'}
-                                            {pinSelectionState === 'end' && '終点を選択してください'}
+                                            {pinSelectionState === 'start' &&
+                                                '始点を選択してください'}
+                                            {pinSelectionState === 'end' &&
+                                                '終点を選択してください'}
                                         </div>
                                     )}
                                     <div className="space-x-2 flex">
@@ -1481,8 +1666,8 @@ export default function Home() {
                                         </div>
                                         <div>
                                             <label className="block text-white/90 text-sm font-medium mb-2">
-                                                <i className="fas fa-stop text-red-400 mr-1"></i> 終点
-                                                (1-246)
+                                                <i className="fas fa-stop text-red-400 mr-1"></i>{' '}
+                                                終点 (1-246)
                                             </label>
                                             <input
                                                 type="text"

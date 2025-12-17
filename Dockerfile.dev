@@ -24,16 +24,6 @@ RUN gcc spfa.c -o spfa21 && \
     gcc calculate_wait_time.c -o signal -lm -std=c99 && \
     chmod +x spfa21 up44 yens_algorithm signal
 
-# WASMランタイム（wasmtime）をインストール
-RUN apk add --no-cache curl tar xz && \
-    curl -L -o /tmp/wasmtime.tar.xz "https://github.com/bytecodealliance/wasmtime/releases/download/v14.0.0/wasmtime-v14.0.0-x86_64-linux.tar.xz" && \
-    cd /tmp && \
-    xz -d wasmtime.tar.xz && \
-    tar -xf wasmtime.tar && \
-    cp wasmtime-v14.0.0-x86_64-linux/wasmtime /usr/local/bin/ && \
-    chmod +x /usr/local/bin/wasmtime && \
-    rm -rf /tmp/wasmtime*
-
 # ポート3000を公開
 EXPOSE 3000
 
