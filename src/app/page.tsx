@@ -59,6 +59,7 @@ export default function Home() {
     const [dataLayers, setDataLayers] = useState<
         Array<{ data: any; style: any; popup?: string; edgeName?: string }>
     >([]);
+    // 194-195 および他の対象経路用スライダーマーカー（青・赤すべて）をまとめて管理
     const slider194_195MarkersRef = useRef<any[]>([]);
     const slider194_195ValuesRef = useRef<Map<string, number>>(new Map());
     const slider194_195VisibleRef = useRef<boolean>(false);
@@ -66,8 +67,10 @@ export default function Home() {
     const slider194_195TypeRef = useRef<'blue' | 'red'>('blue'); // 表示中のスライダータイプ
     const [slider194_195Type, setSlider194_195Type] = useState<'blue' | 'red'>('blue'); // 表示中のスライダータイプ（UI更新用）
     const slider194_195ClickCountRef = useRef<number>(0); // クリック回数をカウント
-    const slider194_195RouteLayerRef = useRef<L.GeoJSON | null>(null); // 194-195の経路レイヤー
+    const slider194_195RouteLayerRef = useRef<L.GeoJSON | null>(null); // 194-195の経路レイヤー（紫）（後方互換性のため残す）
+    const routeLayersRef = useRef<Map<string, L.GeoJSON>>(new Map()); // 各edgeIdごとの経路レイヤー（紫）
     const zoomTimeoutRef = useRef<NodeJS.Timeout | null>(null); // ズーム時のデバウンス用
+    const isRedrawingRef = useRef<boolean>(false); // 再描画中かどうかのフラグ
     const [selectedRouteInfo, setSelectedRouteInfo] = useState<RouteResult | null>(null);
     const [startMarker, setStartMarker] = useState<{
         position: [number, number];
@@ -632,7 +635,18 @@ export default function Home() {
             });
             slider194_195MarkersRef.current = [];
 
-            // 194-195の紫色の経路レイヤーを削除
+            // 全ての経路レイヤーを削除
+            routeLayersRef.current.forEach((layer, edgeId) => {
+                try {
+                    if (map.hasLayer(layer)) {
+                        map.removeLayer(layer);
+                    }
+                } catch (e) {
+                    console.warn(`経路レイヤーの削除でエラー (${edgeId}):`, e);
+                }
+            });
+            routeLayersRef.current.clear();
+            // 後方互換性のため
             if (slider194_195RouteLayerRef.current) {
                 try {
                     const routeLayer = slider194_195RouteLayerRef.current;
@@ -669,6 +683,37 @@ export default function Home() {
             });
         }
     }, [params.param1, params.param2]);
+
+    // 重み設定やパラメータ変更時に紫色の経路を非表示にする
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+
+        // 全ての紫色の経路レイヤーを削除
+        routeLayersRef.current.forEach((layer, edgeId) => {
+            try {
+                if (map.hasLayer(layer)) {
+                    map.removeLayer(layer);
+                }
+            } catch (e) {
+                console.warn(`経路レイヤーの削除でエラー (${edgeId}):`, e);
+            }
+        });
+        routeLayersRef.current.clear();
+
+        // 後方互換性のため
+        if (slider194_195RouteLayerRef.current) {
+            try {
+                const routeLayer = slider194_195RouteLayerRef.current;
+                if (map.hasLayer(routeLayer)) {
+                    map.removeLayer(routeLayer);
+                }
+            } catch (e) {
+                console.warn('経路レイヤーの削除でエラー:', e);
+            }
+            slider194_195RouteLayerRef.current = null;
+        }
+    }, [weights, params.param1, params.param2, params.walkingSpeed]);
 
     // ピンを配置するボタンの処理
     const handleShowPins = () => {
@@ -732,10 +777,13 @@ export default function Home() {
         // 機能を廃止 - 何もしない
     };
 
-    // 194-195にスライダーを表示する関数（page.tsx内で直接管理）
-    const showSliderOn194_195 = useCallback(async () => {
+    // 194-195 など対象経路にスライダーを表示する関数（page.tsx内で直接管理）
+    const showSliderOn194_195 = useCallback(async (isRedrawing: boolean = false) => {
         // ブラウザ環境でのみ実行
         if (typeof window === 'undefined') return;
+
+        // 再描画時かどうかを設定
+        isRedrawingRef.current = isRedrawing;
 
         // 既に作成中の場合は、少し待ってから再試行
         if (slider194_195CreatingRef.current) {
@@ -759,48 +807,51 @@ export default function Home() {
             // Leafletを動的にインポート
             const L = await import('leaflet');
 
-            const edgeDistance = 48.86; // 194-195の距離（メートル）
-            const maxValue = 47; // 48段階（0-47）
-
-            // 既存の194-195スライダーマーカーを削除（重複防止）
-            const slider1Id = '194-195-slider-1';
-            const slider2Id = '194-195-slider-2';
-
-            // 既存のマーカーを削除
+            // 既存の全スライダーマーカーを削除（重複防止）
             slider194_195MarkersRef.current.forEach((marker) => {
                 try {
-                    // クリーンアップ関数があれば実行
                     if ((marker as any)._cleanupEvents) {
                         (marker as any)._cleanupEvents();
                     }
-                    map.removeLayer(marker);
-                } catch (e) {
+                    if (map.hasLayer(marker)) {
+                        map.removeLayer(marker);
+                    }
+                } catch {
                     // 既に削除されている場合は無視
                 }
             });
             slider194_195MarkersRef.current = [];
 
-            // 既存の194-195経路レイヤーを削除
-            if (slider194_195RouteLayerRef.current) {
-                try {
-                    map.removeLayer(slider194_195RouteLayerRef.current);
-                } catch (e) {
-                    // 既に削除されている場合は無視
+            // 既存の経路レイヤーを削除（※再描画時は残す）
+            if (!isRedrawingRef.current) {
+                routeLayersRef.current.forEach((layer, edgeId) => {
+                    try {
+                        if (map.hasLayer(layer)) {
+                            map.removeLayer(layer);
+                        }
+                    } catch {
+                        // 既に削除されている場合は無視
+                    }
+                });
+                routeLayersRef.current.clear();
+                // 後方互換性のため
+                if (slider194_195RouteLayerRef.current) {
+                    try {
+                        if (map.hasLayer(slider194_195RouteLayerRef.current)) {
+                            map.removeLayer(slider194_195RouteLayerRef.current);
+                        }
+                    } catch {
+                        // 既に削除されている場合は無視
+                    }
+                    slider194_195RouteLayerRef.current = null;
                 }
-                slider194_195RouteLayerRef.current = null;
             }
 
-            // 既存のDOM要素も削除（重複防止）
-            const existingSlider1 = document.getElementById(slider1Id);
-            if (existingSlider1 && existingSlider1.parentNode) {
-                existingSlider1.parentNode.removeChild(existingSlider1);
-            }
-            const existingSlider2 = document.getElementById(slider2Id);
-            if (existingSlider2 && existingSlider2.parentNode) {
-                existingSlider2.parentNode.removeChild(existingSlider2);
-            }
-
-            // 既存の切り替えボタンを削除
+            // 既存の DOM（スライダー input 要素・切り替えボタン）を全削除
+            const sliderInputs = document.querySelectorAll('[id$="-slider-1"], [id$="-slider-2"]');
+            sliderInputs.forEach((el) => {
+                el.parentElement?.remove();
+            });
             const existingToggleButton = document.getElementById('194-195-toggle-button');
             if (existingToggleButton) {
                 existingToggleButton.remove();
@@ -809,67 +860,101 @@ export default function Home() {
             // 少し待ってから新しいスライダーを作成（DOMのクリーンアップを確実に）
             await new Promise((resolve) => setTimeout(resolve, 50));
 
-            // 194-195のGeoJSONを読み込む
-            const geojsonPath = '/api/main_server_route/static/oomiya_line/194-195.geojson';
-            const response = await fetch(geojsonPath);
-            if (!response.ok) {
-                console.error('194-195のGeoJSONを読み込めませんでした');
-                slider194_195CreatingRef.current = false;
-                return;
-            }
-            const geojsonData = await response.json();
+            // スライダーを出す対象経路一覧
+            const edges = ['194-195', '22-25', '192-194', '18-22', '26-195', '197-199'];
 
-            // GeoJSONをLeafletレイヤーとして追加
-            const geoJsonLayer = L.default.geoJSON(geojsonData);
-            const features = geoJsonLayer.getLayers() as any[];
+            const allBlueMarkers: any[] = [];
+            const allRedMarkers: any[] = [];
 
-            if (features.length === 0) return;
-            const feature = features[0];
-            const latlngs = feature.getLatLngs() as any[];
-            if (latlngs.length < 2) return;
+            for (const edgeId of edges) {
+                // 各 edgeId ごとに GeoJSON を読み込む
+                const geojsonPath = `/api/main_server_route/static/oomiya_line/${edgeId}.geojson`;
+                const response = await fetch(geojsonPath);
+                if (!response.ok) {
+                    console.error(`${edgeId} のGeoJSONを読み込めませんでした`);
+                    continue;
+                }
+                const geojsonData = await response.json();
 
-            const startPoint = latlngs[0];
-            const endPoint = latlngs[latlngs.length - 1];
+                const geoJsonLayer = L.default.geoJSON(geojsonData);
+                const features = geoJsonLayer.getLayers() as any[];
+                if (features.length === 0) continue;
 
-            // 194-195の方向を計算
-            const startPixel = map.latLngToContainerPoint(startPoint);
-            const endPixel = map.latLngToContainerPoint(endPoint);
-            const dx = endPixel.x - startPixel.x;
-            const dy = endPixel.y - startPixel.y;
-            const angle = Math.atan2(dy, dx) * (180 / Math.PI);
-            const pixelLength = Math.sqrt(dx * dx + dy * dy);
+                const feature = features[0];
+                const latlngs = feature.getLatLngs() as any[];
+                if (latlngs.length < 2) continue;
 
-            // スライダーは194-195の経路上に直接配置（中心点を使用）
-            const centerPoint = L.default.latLng(
-                (startPoint.lat + endPoint.lat) / 2,
-                (startPoint.lng + endPoint.lng) / 2
-            );
+                const startPoint = latlngs[0];
+                const endPoint = latlngs[latlngs.length - 1];
 
-            // 垂直方向の角度（経路の上側に配置）
-            const perpendicularAngle = angle + 90;
-            const offsetPixels = 15; // 経路から少し離す（視認性のため）
-            const offsetAngleRad = (perpendicularAngle * Math.PI) / 180;
-            const centerPixel = map.latLngToContainerPoint(centerPoint);
+                // 経路の方向と長さを計算
+                const startPixel = map.latLngToContainerPoint(startPoint);
+                const endPixel = map.latLngToContainerPoint(endPoint);
+                const dx = endPixel.x - startPixel.x;
+                const dy = endPixel.y - startPixel.y;
+                const angle = Math.atan2(dy, dx) * (180 / Math.PI);
+                const pixelLength = Math.sqrt(dx * dx + dy * dy);
 
-            // スライダーの位置（青色と赤色を同じ位置に配置）
-            const offset1Pixel = L.default.point(
-                centerPixel.x + Math.cos(offsetAngleRad) * offsetPixels,
-                centerPixel.y + Math.sin(offsetAngleRad) * offsetPixels
-            );
-            const sliderPosition = map.containerPointToLatLng(offset1Pixel);
+                // 経路の中心点付近にスライダーを配置
+                const centerPoint = L.default.latLng(
+                    (startPoint.lat + endPoint.lat) / 2,
+                    (startPoint.lng + endPoint.lng) / 2
+                );
 
-            // スライダーの値（1つ目と2つ目で独立）
-            const slider1Key = '194-195-slider1';
-            const slider2Key = '194-195-slider2';
-            const currentValue1 = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
-            const currentValue2 = slider194_195ValuesRef.current.get(slider2Key) ?? 0;
+                const perpendicularAngle = angle + 90;
+                // 22-25 と 18-22 のスライダーだけ、通常より上側へずらす
+                // 26-195 のスライダーは下側に少しずらす
+                const offsetPixels =
+                    edgeId === '22-25' || edgeId === '18-22' ? -10 : edgeId === '26-195' ? 20 : 15; // 経路から少し離す（視認性のため）
+                const offsetAngleRad = (perpendicularAngle * Math.PI) / 180;
+                const centerPixel = map.latLngToContainerPoint(centerPoint);
 
-            const sliderWidth = pixelLength;
+                // 26-195 のスライダーを左にずらすための追加オフセット
+                const leftOffsetPixels = edgeId === '26-195' ? -20 : 0;
+                const leftOffsetAngleRad = (angle * Math.PI) / 180; // 経路の角度に対して左側（-90度方向）
 
-            // 1つ目のスライダー（青と白）
-            const slider1DivIcon = L.default.divIcon({
-                className: 'route-weight-slider',
-                html: `
+                const offsetPixel = L.default.point(
+                    centerPixel.x +
+                        Math.cos(offsetAngleRad) * offsetPixels +
+                        Math.cos(leftOffsetAngleRad - Math.PI / 2) * leftOffsetPixels,
+                    centerPixel.y +
+                        Math.sin(offsetAngleRad) * offsetPixels +
+                        Math.sin(leftOffsetAngleRad - Math.PI / 2) * leftOffsetPixels
+                );
+                const sliderPosition = map.containerPointToLatLng(offsetPixel);
+
+                // スライダーの値（1つ目と2つ目で独立）
+                const slider1Id = `${edgeId}-slider-1`;
+                const slider2Id = `${edgeId}-slider-2`;
+                const slider1Key = `${edgeId}-slider1`;
+                const slider2Key = `${edgeId}-slider2`;
+                const currentValue1 = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
+                const currentValue2 = slider194_195ValuesRef.current.get(slider2Key) ?? 0;
+
+                // スライダーの最大値（各edgeIdに応じた分割数）
+                let maxValue: number;
+                if (edgeId === '192-194') {
+                    maxValue = 130; // 131分割（0-130）
+                } else if (edgeId === '22-25') {
+                    maxValue = 49; // 50分割（0-49）
+                } else if (edgeId === '18-22') {
+                    maxValue = 131; // 132分割（0-131）
+                } else if (edgeId === '26-195') {
+                    maxValue = 191; // 192分割（0-191）
+                } else if (edgeId === '197-199') {
+                    maxValue = 190; // 191分割（0-190）
+                } else {
+                    maxValue = 47; // 194-195: 48分割（0-47）
+                }
+
+                // 26-195 と 197-199 のスライダーの長さを僅かに短くする
+                const sliderWidth =
+                    edgeId === '26-195' || edgeId === '197-199' ? pixelLength * 0.93 : pixelLength;
+
+                // 1つ目のスライダー（青と白）
+                const slider1DivIcon = L.default.divIcon({
+                    className: 'route-weight-slider',
+                    html: `
                     <div style="
                         transform: rotate(${angle}deg);
                         transform-origin: center center;
@@ -888,7 +973,7 @@ export default function Home() {
                             style="
                                 width: ${sliderWidth}px;
                                 height: 6px;
-                                background: linear-gradient(to right, #3b82f6 0%, #ffffff 50%, #3b82f6 100%);
+                                background: #3b82f6;
                                 border-radius: 3px;
                                 outline: none;
                                 cursor: pointer;
@@ -909,6 +994,8 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
                             }
                             #${slider1Id}::-moz-range-thumb {
                                 width: 16px;
@@ -918,28 +1005,36 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
+                            }
+                            #${slider1Id}.thumb-visible::-webkit-slider-thumb {
+                                opacity: 1;
+                            }
+                            #${slider1Id}.thumb-visible::-moz-range-thumb {
+                                opacity: 1;
                             }
                             #${slider1Id}::-webkit-slider-runnable-track {
-                                background: linear-gradient(to right, #3b82f6 0%, #ffffff 50%, #3b82f6 100%);
+                                background: #3b82f6;
                                 height: 6px;
                                 border-radius: 3px;
                             }
                             #${slider1Id}::-moz-range-track {
-                                background: linear-gradient(to right, #3b82f6 0%, #ffffff 50%, #3b82f6 100%);
+                                background: #3b82f6;
                                 height: 6px;
                                 border-radius: 3px;
                             }
                         </style>
                     </div>
                 `,
-                iconSize: [sliderWidth, 20],
-                iconAnchor: [sliderWidth / 2, 10],
-            });
+                    iconSize: [sliderWidth, 20],
+                    iconAnchor: [sliderWidth / 2, 10],
+                });
 
-            // 2つ目のスライダー（赤と白）
-            const slider2DivIcon = L.default.divIcon({
-                className: 'route-weight-slider',
-                html: `
+                // 2つ目のスライダー（赤と白）
+                const slider2DivIcon = L.default.divIcon({
+                    className: 'route-weight-slider',
+                    html: `
                     <div style="
                         transform: rotate(${angle}deg);
                         transform-origin: center center;
@@ -958,7 +1053,7 @@ export default function Home() {
                             style="
                                 width: ${sliderWidth}px;
                                 height: 6px;
-                                background: linear-gradient(to right, #ef4444 0%, #ffffff 50%, #ef4444 100%);
+                                background: #ef4444;
                                 border-radius: 3px;
                                 outline: none;
                                 cursor: pointer;
@@ -979,6 +1074,8 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
                             }
                             #${slider2Id}::-moz-range-thumb {
                                 width: 16px;
@@ -988,253 +1085,282 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
+                            }
+                            #${slider2Id}.thumb-visible::-webkit-slider-thumb {
+                                opacity: 1;
+                            }
+                            #${slider2Id}.thumb-visible::-moz-range-thumb {
+                                opacity: 1;
                             }
                             #${slider2Id}::-webkit-slider-runnable-track {
-                                background: linear-gradient(to right, #ef4444 0%, #ffffff 50%, #ef4444 100%);
+                                background: #ef4444;
                                 height: 6px;
                                 border-radius: 3px;
                             }
                             #${slider2Id}::-moz-range-track {
-                                background: linear-gradient(to right, #ef4444 0%, #ffffff 50%, #ef4444 100%);
+                                background: #ef4444;
                                 height: 6px;
                                 border-radius: 3px;
                             }
                         </style>
                     </div>
                 `,
-                iconSize: [sliderWidth, 20],
-                iconAnchor: [sliderWidth / 2, 10],
-            });
-
-            // マーカーを作成（同じ位置に配置）
-            const slider1Marker = L.default.marker(sliderPosition, {
-                icon: slider1DivIcon,
-                interactive: true,
-            });
-
-            const slider2Marker = L.default.marker(sliderPosition, {
-                icon: slider2DivIcon,
-                interactive: true,
-            });
-
-            // マーカーのクリックイベントを無効化
-            [slider1Marker, slider2Marker].forEach((marker) => {
-                marker.on('click', (e) => {
-                    L.default.DomEvent.stopPropagation(e);
+                    iconSize: [sliderWidth, 20],
+                    iconAnchor: [sliderWidth / 2, 10],
                 });
-                marker.on('dblclick', (e) => {
-                    L.default.DomEvent.stopPropagation(e);
+
+                // マーカーを作成（各 edgeId ごとに同じ位置に配置）
+                const slider1Marker = L.default.marker(sliderPosition, {
+                    icon: slider1DivIcon,
+                    interactive: true,
                 });
-            });
 
-            // 1つ目のスライダーのイベントリスナー
-            slider1Marker.on('add', () => {
-                setTimeout(() => {
-                    const sliderElement = document.getElementById(slider1Id) as HTMLInputElement;
-                    if (!sliderElement) return;
+                const slider2Marker = L.default.marker(sliderPosition, {
+                    icon: slider2DivIcon,
+                    interactive: true,
+                });
 
-                    let isDragging = false;
+                // マーカーのクリックイベントを無効化
+                [slider1Marker, slider2Marker].forEach((marker) => {
+                    marker.on('click', (e) => {
+                        L.default.DomEvent.stopPropagation(e);
+                    });
+                    marker.on('dblclick', (e) => {
+                        L.default.DomEvent.stopPropagation(e);
+                    });
+                });
 
-                    const disableMapDragging = () => {
-                        if (map.dragging) {
-                            map.dragging.disable();
-                        }
-                    };
+                // 1つ目のスライダーのイベントリスナー（青）
+                slider1Marker.on('add', () => {
+                    setTimeout(() => {
+                        const sliderElement = document.getElementById(
+                            slider1Id
+                        ) as HTMLInputElement;
+                        if (!sliderElement) return;
 
-                    const enableMapDragging = () => {
-                        if (map.dragging && !isDragging) {
-                            map.dragging.enable();
-                        }
-                    };
+                        let isDragging = false;
 
-                    const handleMouseDown = (e: MouseEvent) => {
-                        isDragging = true;
-                        disableMapDragging();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                    };
+                        const disableMapDragging = () => {
+                            if (map.dragging) {
+                                map.dragging.disable();
+                            }
+                        };
 
-                    const handleMouseMove = (e: MouseEvent) => {
-                        if (isDragging) {
+                        const enableMapDragging = () => {
+                            if (map.dragging && !isDragging) {
+                                map.dragging.enable();
+                            }
+                        };
+
+                        const handleMouseDown = (e: MouseEvent) => {
+                            isDragging = true;
                             disableMapDragging();
+                            // スライダーのハンドルを表示
+                            sliderElement.classList.add('thumb-visible');
+                            // クリック時に現在の値で経路を表示
+                            const currentValue = parseInt(sliderElement.value);
+                            handleSlider194_195Change(edgeId, currentValue, 1);
                             e.stopPropagation();
                             e.stopImmediatePropagation();
-                        }
-                    };
+                        };
 
-                    const handleMouseUp = () => {
-                        isDragging = false;
-                        enableMapDragging();
-                    };
+                        const handleMouseMove = (e: MouseEvent) => {
+                            if (isDragging) {
+                                disableMapDragging();
+                                e.stopPropagation();
+                                e.stopImmediatePropagation();
+                            }
+                        };
 
-                    const handleMouseLeave = () => {
-                        isDragging = false;
-                        enableMapDragging();
-                    };
+                        const handleMouseUp = () => {
+                            isDragging = false;
+                            enableMapDragging();
+                        };
 
-                    // 既存のイベントリスナーを削除してから追加（重複防止）
-                    sliderElement.removeEventListener('mousedown', handleMouseDown);
-                    sliderElement.removeEventListener('mousemove', handleMouseMove);
-                    sliderElement.removeEventListener('mouseup', handleMouseUp);
-                    sliderElement.removeEventListener('mouseleave', handleMouseLeave);
+                        const handleMouseLeave = () => {
+                            isDragging = false;
+                            enableMapDragging();
+                        };
 
-                    sliderElement.addEventListener('mousedown', handleMouseDown, true);
-                    sliderElement.addEventListener('mousemove', handleMouseMove, true);
-                    sliderElement.addEventListener('mouseup', handleMouseUp, true);
-                    sliderElement.addEventListener('mouseleave', handleMouseLeave, true);
+                        // 既存のイベントリスナーを削除してから追加（重複防止）
+                        sliderElement.removeEventListener('mousedown', handleMouseDown);
+                        sliderElement.removeEventListener('mousemove', handleMouseMove);
+                        sliderElement.removeEventListener('mouseup', handleMouseUp);
+                        sliderElement.removeEventListener('mouseleave', handleMouseLeave);
 
-                    // グローバルイベントでマップのドラッグを確実に無効化
-                    const globalMouseMove = (e: MouseEvent) => {
-                        if (isDragging) {
-                            disableMapDragging();
+                        sliderElement.addEventListener('mousedown', handleMouseDown, true);
+                        sliderElement.addEventListener('mousemove', handleMouseMove, true);
+                        sliderElement.addEventListener('mouseup', handleMouseUp, true);
+                        sliderElement.addEventListener('mouseleave', handleMouseLeave, true);
+
+                        // グローバルイベントでマップのドラッグを確実に無効化
+                        const globalMouseMove = (e: MouseEvent) => {
+                            if (isDragging) {
+                                disableMapDragging();
+                                e.stopPropagation();
+                            }
+                        };
+                        const globalMouseUp = () => {
+                            isDragging = false;
+                            enableMapDragging();
+                        };
+
+                        // グローバルイベントリスナーを追加
+                        document.addEventListener('mousemove', globalMouseMove, true);
+                        document.addEventListener('mouseup', globalMouseUp, true);
+
+                        // クリーンアップ関数を保存（マーカーが削除される際に呼び出す）
+                        (slider1Marker as any)._cleanupEvents = () => {
+                            document.removeEventListener('mousemove', globalMouseMove, true);
+                            document.removeEventListener('mouseup', globalMouseUp, true);
+                            sliderElement.removeEventListener('mousedown', handleMouseDown, true);
+                            sliderElement.removeEventListener('mousemove', handleMouseMove, true);
+                            sliderElement.removeEventListener('mouseup', handleMouseUp, true);
+                            sliderElement.removeEventListener('mouseleave', handleMouseLeave, true);
+                        };
+
+                        sliderElement.addEventListener('input', (e) => {
                             e.stopPropagation();
-                        }
-                    };
-                    const globalMouseUp = () => {
-                        isDragging = false;
-                        enableMapDragging();
-                    };
+                            const value = parseInt((e.target as HTMLInputElement).value);
+                            slider194_195ValuesRef.current.set(slider1Key, value);
+                            handleSlider194_195Change(edgeId, value, 1);
+                        });
 
-                    // グローバルイベントリスナーを追加
-                    document.addEventListener('mousemove', globalMouseMove, true);
-                    document.addEventListener('mouseup', globalMouseUp, true);
+                        sliderElement.addEventListener('change', (e) => {
+                            e.stopPropagation();
+                            const value = parseInt((e.target as HTMLInputElement).value);
+                            slider194_195ValuesRef.current.set(slider1Key, value);
+                            handleSlider194_195Change(edgeId, value, 1);
+                        });
+                    }, 100);
+                });
 
-                    // クリーンアップ関数を保存（マーカーが削除される際に呼び出す）
-                    (slider1Marker as any)._cleanupEvents = () => {
-                        document.removeEventListener('mousemove', globalMouseMove, true);
-                        document.removeEventListener('mouseup', globalMouseUp, true);
-                        sliderElement.removeEventListener('mousedown', handleMouseDown, true);
-                        sliderElement.removeEventListener('mousemove', handleMouseMove, true);
-                        sliderElement.removeEventListener('mouseup', handleMouseUp, true);
-                        sliderElement.removeEventListener('mouseleave', handleMouseLeave, true);
-                    };
+                // 2つ目のスライダーのイベントリスナー（赤）
+                slider2Marker.on('add', () => {
+                    setTimeout(() => {
+                        const sliderElement = document.getElementById(
+                            slider2Id
+                        ) as HTMLInputElement;
+                        if (!sliderElement) return;
 
-                    sliderElement.addEventListener('input', (e) => {
-                        e.stopPropagation();
-                        const value = parseInt((e.target as HTMLInputElement).value);
-                        slider194_195ValuesRef.current.set(slider1Key, value);
-                        handleSlider194_195Change(value, 1);
-                    });
+                        let isDragging = false;
 
-                    sliderElement.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        const value = parseInt((e.target as HTMLInputElement).value);
-                        slider194_195ValuesRef.current.set(slider1Key, value);
-                        handleSlider194_195Change(value, 1);
-                    });
-                }, 100);
-            });
+                        const disableMapDragging = () => {
+                            if (map.dragging) {
+                                map.dragging.disable();
+                            }
+                        };
 
-            // 2つ目のスライダーのイベントリスナー
-            slider2Marker.on('add', () => {
-                setTimeout(() => {
-                    const sliderElement = document.getElementById(slider2Id) as HTMLInputElement;
-                    if (!sliderElement) return;
+                        const enableMapDragging = () => {
+                            if (map.dragging && !isDragging) {
+                                map.dragging.enable();
+                            }
+                        };
 
-                    let isDragging = false;
-
-                    const disableMapDragging = () => {
-                        if (map.dragging) {
-                            map.dragging.disable();
-                        }
-                    };
-
-                    const enableMapDragging = () => {
-                        if (map.dragging && !isDragging) {
-                            map.dragging.enable();
-                        }
-                    };
-
-                    const handleMouseDown = (e: MouseEvent) => {
-                        isDragging = true;
-                        disableMapDragging();
-                        e.stopPropagation();
-                        e.stopImmediatePropagation();
-                    };
-
-                    const handleMouseMove = (e: MouseEvent) => {
-                        if (isDragging) {
+                        const handleMouseDown = (e: MouseEvent) => {
+                            isDragging = true;
                             disableMapDragging();
+                            // スライダーのハンドルを表示
+                            sliderElement.classList.add('thumb-visible');
+                            // クリック時に現在の値で経路を表示
+                            const currentValue = parseInt(sliderElement.value);
+                            handleSlider194_195Change(edgeId, currentValue, 2);
                             e.stopPropagation();
                             e.stopImmediatePropagation();
-                        }
-                    };
+                        };
 
-                    const handleMouseUp = () => {
-                        isDragging = false;
-                        enableMapDragging();
-                    };
+                        const handleMouseMove = (e: MouseEvent) => {
+                            if (isDragging) {
+                                disableMapDragging();
+                                e.stopPropagation();
+                                e.stopImmediatePropagation();
+                            }
+                        };
 
-                    const handleMouseLeave = () => {
-                        isDragging = false;
-                        enableMapDragging();
-                    };
+                        const handleMouseUp = () => {
+                            isDragging = false;
+                            enableMapDragging();
+                        };
 
-                    // 既存のイベントリスナーを削除してから追加（重複防止）
-                    sliderElement.removeEventListener('mousedown', handleMouseDown);
-                    sliderElement.removeEventListener('mousemove', handleMouseMove);
-                    sliderElement.removeEventListener('mouseup', handleMouseUp);
-                    sliderElement.removeEventListener('mouseleave', handleMouseLeave);
+                        const handleMouseLeave = () => {
+                            isDragging = false;
+                            enableMapDragging();
+                        };
 
-                    sliderElement.addEventListener('mousedown', handleMouseDown, true);
-                    sliderElement.addEventListener('mousemove', handleMouseMove, true);
-                    sliderElement.addEventListener('mouseup', handleMouseUp, true);
-                    sliderElement.addEventListener('mouseleave', handleMouseLeave, true);
+                        // 既存のイベントリスナーを削除してから追加（重複防止）
+                        sliderElement.removeEventListener('mousedown', handleMouseDown);
+                        sliderElement.removeEventListener('mousemove', handleMouseMove);
+                        sliderElement.removeEventListener('mouseup', handleMouseUp);
+                        sliderElement.removeEventListener('mouseleave', handleMouseLeave);
 
-                    // グローバルイベントでマップのドラッグを確実に無効化
-                    const globalMouseMove = (e: MouseEvent) => {
-                        if (isDragging) {
-                            disableMapDragging();
+                        sliderElement.addEventListener('mousedown', handleMouseDown, true);
+                        sliderElement.addEventListener('mousemove', handleMouseMove, true);
+                        sliderElement.addEventListener('mouseup', handleMouseUp, true);
+                        sliderElement.addEventListener('mouseleave', handleMouseLeave, true);
+
+                        // グローバルイベントでマップのドラッグを確実に無効化
+                        const globalMouseMove = (e: MouseEvent) => {
+                            if (isDragging) {
+                                disableMapDragging();
+                                e.stopPropagation();
+                            }
+                        };
+                        const globalMouseUp = () => {
+                            isDragging = false;
+                            enableMapDragging();
+                        };
+
+                        // グローバルイベントリスナーを追加
+                        document.addEventListener('mousemove', globalMouseMove, true);
+                        document.addEventListener('mouseup', globalMouseUp, true);
+
+                        // クリーンアップ関数を保存（マーカーが削除される際に呼び出す）
+                        (slider2Marker as any)._cleanupEvents = () => {
+                            document.removeEventListener('mousemove', globalMouseMove, true);
+                            document.removeEventListener('mouseup', globalMouseUp, true);
+                            sliderElement.removeEventListener('mousedown', handleMouseDown, true);
+                            sliderElement.removeEventListener('mousemove', handleMouseMove, true);
+                            sliderElement.removeEventListener('mouseup', handleMouseUp, true);
+                            sliderElement.removeEventListener('mouseleave', handleMouseLeave, true);
+                        };
+
+                        sliderElement.addEventListener('input', (e) => {
                             e.stopPropagation();
-                        }
-                    };
-                    const globalMouseUp = () => {
-                        isDragging = false;
-                        enableMapDragging();
-                    };
+                            const value = parseInt((e.target as HTMLInputElement).value);
+                            slider194_195ValuesRef.current.set(slider2Key, value);
+                            handleSlider194_195Change(edgeId, value, 2);
+                        });
 
-                    // グローバルイベントリスナーを追加
-                    document.addEventListener('mousemove', globalMouseMove, true);
-                    document.addEventListener('mouseup', globalMouseUp, true);
+                        sliderElement.addEventListener('change', (e) => {
+                            e.stopPropagation();
+                            const value = parseInt((e.target as HTMLInputElement).value);
+                            slider194_195ValuesRef.current.set(slider2Key, value);
+                            handleSlider194_195Change(edgeId, value, 2);
+                        });
+                    }, 100);
+                });
 
-                    // クリーンアップ関数を保存（マーカーが削除される際に呼び出す）
-                    (slider2Marker as any)._cleanupEvents = () => {
-                        document.removeEventListener('mousemove', globalMouseMove, true);
-                        document.removeEventListener('mouseup', globalMouseUp, true);
-                        sliderElement.removeEventListener('mousedown', handleMouseDown, true);
-                        sliderElement.removeEventListener('mousemove', handleMouseMove, true);
-                        sliderElement.removeEventListener('mouseup', handleMouseUp, true);
-                        sliderElement.removeEventListener('mouseleave', handleMouseLeave, true);
-                    };
+                allBlueMarkers.push(slider1Marker);
+                allRedMarkers.push(slider2Marker);
+                slider194_195MarkersRef.current.push(slider1Marker, slider2Marker);
+            }
 
-                    sliderElement.addEventListener('input', (e) => {
-                        e.stopPropagation();
-                        const value = parseInt((e.target as HTMLInputElement).value);
-                        console.log(`[スライダー2 input] value: ${value}`);
-                        slider194_195ValuesRef.current.set(slider2Key, value);
-                        handleSlider194_195Change(value, 2);
-                    });
-
-                    sliderElement.addEventListener('change', (e) => {
-                        e.stopPropagation();
-                        const value = parseInt((e.target as HTMLInputElement).value);
-                        console.log(`[スライダー2 change] value: ${value}`);
-                        slider194_195ValuesRef.current.set(slider2Key, value);
-                        handleSlider194_195Change(value, 2);
-                    });
-                }, 100);
-            });
-
-            // 初期状態は青色を表示
-            slider1Marker.addTo(map);
-            slider194_195MarkersRef.current.push(slider1Marker, slider2Marker);
+            // 現在の色状態を保持（再描画時も状態を維持）
+            const currentType = slider194_195TypeRef.current || 'blue';
             slider194_195VisibleRef.current = true;
-            slider194_195TypeRef.current = 'blue';
-            setSlider194_195Type('blue');
+            slider194_195TypeRef.current = currentType;
+            setSlider194_195Type(currentType);
 
-            // 初期値の経路を表示
-            const initialValue = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
-            handleSlider194_195Change(initialValue, 1);
+            // 現在の状態に応じてスライダーを表示
+            if (currentType === 'red') {
+                allRedMarkers.forEach((m) => m.addTo(map));
+            } else {
+                allBlueMarkers.forEach((m) => m.addTo(map));
+            }
+
+            // 初期値の経路は表示しない（スライダーを動かしてから表示）
 
             // 左上に切り替えボタンを追加
             const toggleButtonId = '194-195-toggle-button';
@@ -1249,9 +1375,10 @@ export default function Home() {
             `;
 
             const toggleButton = document.createElement('button');
-            toggleButton.textContent = '赤色に切り替え';
+            // 現在の状態に応じてボタンのテキストと色を設定
+            toggleButton.textContent = currentType === 'blue' ? '赤色に切り替え' : '青色に切り替え';
             toggleButton.style.cssText = `
-                background: #ef4444;
+                background: ${currentType === 'blue' ? '#ef4444' : '#3b82f6'};
                 color: white;
                 border: none;
                 border-radius: 4px;
@@ -1269,45 +1396,121 @@ export default function Home() {
                     slider194_195TypeRef.current === 'blue' ? '#ef4444' : '#3b82f6';
             };
 
-            // ボタンのクリックイベント
+            // ボタンのクリックイベント（全スライダーを青⇔赤で一括切り替え）
             toggleButton.addEventListener('click', (e) => {
                 e.stopPropagation();
                 e.preventDefault();
 
                 if (slider194_195TypeRef.current === 'blue') {
-                    // 青色から赤色に切り替え
-                    if (map.hasLayer(slider1Marker)) {
-                        map.removeLayer(slider1Marker);
-                    }
-                    if (!map.hasLayer(slider2Marker)) {
-                        slider2Marker.addTo(map);
-                    }
+                    // 青色から赤色に切り替え（全経路）
+                    slider194_195MarkersRef.current.forEach((marker: any) => {
+                        try {
+                            if (
+                                map.hasLayer(marker) &&
+                                (marker as any).options.icon === undefined
+                            ) {
+                                map.removeLayer(marker);
+                            }
+                        } catch {
+                            /* ignore */
+                        }
+                    });
+                    allBlueMarkers.forEach((marker) => {
+                        try {
+                            if (map.hasLayer(marker)) {
+                                map.removeLayer(marker);
+                            }
+                        } catch {
+                            /* ignore */
+                        }
+                    });
+                    allRedMarkers.forEach((marker) => {
+                        try {
+                            if (!map.hasLayer(marker)) {
+                                marker.addTo(map);
+                            }
+                        } catch {
+                            /* ignore */
+                        }
+                    });
                     slider194_195TypeRef.current = 'red';
                     setSlider194_195Type('red');
                     toggleButton.textContent = '青色に切り替え';
                     toggleButton.style.background = '#3b82f6';
 
-                    // 赤色のスライダー値で経路を更新
-                    const slider2Key = '194-195-slider2';
-                    const currentValue2 = slider194_195ValuesRef.current.get(slider2Key) ?? 0;
-                    handleSlider194_195Change(currentValue2, 2);
+                    // 経路は表示しない（スライダーを動かしてから表示）
+                    // 既存の全経路を削除
+                    routeLayersRef.current.forEach((layer, edgeId) => {
+                        try {
+                            if (map.hasLayer(layer)) {
+                                map.removeLayer(layer);
+                            }
+                        } catch (e) {
+                            console.warn(`経路レイヤーの削除でエラー (${edgeId}):`, e);
+                        }
+                    });
+                    routeLayersRef.current.clear();
+                    // 後方互換性のため
+                    if (slider194_195RouteLayerRef.current) {
+                        try {
+                            const routeLayer = slider194_195RouteLayerRef.current;
+                            if (map.hasLayer(routeLayer)) {
+                                map.removeLayer(routeLayer);
+                            }
+                        } catch (e) {
+                            console.warn('経路レイヤーの削除でエラー:', e);
+                        }
+                        slider194_195RouteLayerRef.current = null;
+                    }
                 } else {
-                    // 赤色から青色に切り替え
-                    if (map.hasLayer(slider2Marker)) {
-                        map.removeLayer(slider2Marker);
-                    }
-                    if (!map.hasLayer(slider1Marker)) {
-                        slider1Marker.addTo(map);
-                    }
+                    // 赤色から青色に切り替え（全経路）
+                    allRedMarkers.forEach((marker) => {
+                        try {
+                            if (map.hasLayer(marker)) {
+                                map.removeLayer(marker);
+                            }
+                        } catch {
+                            /* ignore */
+                        }
+                    });
+                    allBlueMarkers.forEach((marker) => {
+                        try {
+                            if (!map.hasLayer(marker)) {
+                                marker.addTo(map);
+                            }
+                        } catch {
+                            /* ignore */
+                        }
+                    });
                     slider194_195TypeRef.current = 'blue';
                     setSlider194_195Type('blue');
                     toggleButton.textContent = '赤色に切り替え';
                     toggleButton.style.background = '#ef4444';
 
-                    // 青色のスライダー値で経路を更新
-                    const slider1Key = '194-195-slider1';
-                    const currentValue1 = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
-                    handleSlider194_195Change(currentValue1, 1);
+                    // 経路は表示しない（スライダーを動かしてから表示）
+                    // 既存の全経路を削除
+                    routeLayersRef.current.forEach((layer, edgeId) => {
+                        try {
+                            if (map.hasLayer(layer)) {
+                                map.removeLayer(layer);
+                            }
+                        } catch (e) {
+                            console.warn(`経路レイヤーの削除でエラー (${edgeId}):`, e);
+                        }
+                    });
+                    routeLayersRef.current.clear();
+                    // 後方互換性のため
+                    if (slider194_195RouteLayerRef.current) {
+                        try {
+                            const routeLayer = slider194_195RouteLayerRef.current;
+                            if (map.hasLayer(routeLayer)) {
+                                map.removeLayer(routeLayer);
+                            }
+                        } catch (e) {
+                            console.warn('経路レイヤーの削除でエラー:', e);
+                        }
+                        slider194_195RouteLayerRef.current = null;
+                    }
                 }
             });
 
@@ -1328,23 +1531,63 @@ export default function Home() {
             slider194_195VisibleRef.current = false;
         } finally {
             slider194_195CreatingRef.current = false;
+            isRedrawingRef.current = false;
         }
     }, []);
 
-    // 194-195のスライダー変更時の処理
-    const handleSlider194_195Change = async (distance: number, sliderType: number) => {
+    // 194-195 のスライダー変更時の処理
+    // 他の経路（22-25 など）は、現状は UI のみで紫の経路は描画しない
+    const handleSlider194_195Change = async (
+        edgeId: string,
+        distance: number,
+        sliderType: number
+    ) => {
         const map = mapRef.current;
         if (!map) {
             console.warn('マップが初期化されていません');
             return;
         }
 
-        console.log(`[スライダー変更] distance: ${distance}, sliderType: ${sliderType}`);
+        console.log(
+            `[スライダー変更] edgeId: ${edgeId}, distance: ${distance}, sliderType: ${sliderType}`
+        );
 
-        // スライダー値からファイル番号を計算（0→48、1→47、...、47→1）
-        const fileNumber = 48 - Math.floor(distance);
-        const sliderTypeName = sliderType === 1 ? 'blue' : 'red';
-        const directory = sliderType === 1 ? '194-195_green' : '194-195_red';
+        // 全てのedgeIdで経路描画をサポート
+        const supportedEdgeIds = ['194-195', '192-194', '22-25', '18-22', '26-195', '197-199'];
+        if (!supportedEdgeIds.includes(edgeId)) {
+            return;
+        }
+
+        // スライダー値からファイル番号を計算
+        let fileNumber: number;
+        let directory: string;
+
+        if (edgeId === '192-194') {
+            // 192-194: 0→131、1→130、...、130→1（131分割）
+            fileNumber = 131 - Math.floor(distance);
+            directory = sliderType === 1 ? '192-194_green' : '192-194_red';
+        } else if (edgeId === '22-25') {
+            // 22-25: 0→50、1→49、...、49→1（50分割）
+            fileNumber = 50 - Math.floor(distance);
+            directory = sliderType === 1 ? '22-25_green' : '22_25_red';
+        } else if (edgeId === '18-22') {
+            // 18-22: 0→132、1→131、...、131→1（132分割）
+            fileNumber = 132 - Math.floor(distance);
+            directory = sliderType === 1 ? '18-22_green' : '18-22_red';
+        } else if (edgeId === '26-195') {
+            // 26-195: 0→192、1→191、...、191→1（192分割）
+            fileNumber = 192 - Math.floor(distance);
+            directory = sliderType === 1 ? '26-195_green' : '26-195_red';
+        } else if (edgeId === '197-199') {
+            // 197-199: 0→191、1→190、...、190→1（191分割）
+            fileNumber = 191 - Math.floor(distance);
+            directory = sliderType === 1 ? '197-199_green' : '197-199_red';
+        } else {
+            // 194-195: 0→48、1→47、...、47→1（48分割）
+            fileNumber = 48 - Math.floor(distance);
+            directory = sliderType === 1 ? '194-195_green' : '194-195_red';
+        }
+
         const fileName = `${fileNumber}.txt`;
 
         console.log(
@@ -1352,19 +1595,69 @@ export default function Home() {
         );
 
         try {
-            // 既存の194-195経路レイヤーを確実に削除
+            // 既存の経路レイヤーを確実に削除（該当edgeIdの全てのsliderType）
+            console.log(`[レイヤー削除開始] edgeId: ${edgeId}, sliderType: ${sliderType}`);
+            console.log(`[現在のレイヤー数] routeLayersRef: ${routeLayersRef.current.size}`);
+
+            // 全ての紫色の経路レイヤーを削除（どのスライダーでも少しでも動かしたら全て非表示）
+            const keysToDelete: string[] = [];
+            routeLayersRef.current.forEach((layer, key) => {
+                keysToDelete.push(key);
+                try {
+                    if (map.hasLayer(layer)) {
+                        map.removeLayer(layer);
+                        console.log(`[既存レイヤー削除] ${key}のレイヤーを削除しました`);
+                    } else {
+                        console.log(
+                            `[既存レイヤー削除スキップ] ${key}のレイヤーはマップ上に存在しません`
+                        );
+                    }
+                } catch (e) {
+                    console.warn(`既存レイヤーの削除でエラー (${key}):`, e);
+                }
+            });
+            // 全てのキーを削除
+            keysToDelete.forEach((key) => {
+                routeLayersRef.current.delete(key);
+            });
+            console.log(`[レイヤー削除完了] 削除したキー数: ${keysToDelete.length}`);
+
+            // 後方互換性のため（194-195の場合のみ）
             if (slider194_195RouteLayerRef.current) {
                 try {
                     const oldLayer = slider194_195RouteLayerRef.current;
                     if (map.hasLayer(oldLayer)) {
                         map.removeLayer(oldLayer);
-                        console.log('[既存レイヤー削除] レイヤーを削除しました');
+                        console.log('[既存レイヤー削除] 後方互換レイヤーを削除しました');
                     }
                 } catch (e) {
                     console.warn('既存レイヤーの削除でエラー:', e);
                 }
                 slider194_195RouteLayerRef.current = null;
             }
+
+            // 念のため、マップ上の全てのレイヤーを確認して、紫色の経路レイヤー（_edgeIdが設定されているもの）を削除
+            // 削除するレイヤーのリストを先に収集（反復処理中に削除すると問題が発生するため）
+            const layersToRemove: any[] = [];
+            map.eachLayer((layer: any) => {
+                if (layer._edgeId) {
+                    // _edgeIdが設定されているレイヤーは紫色の経路レイヤー
+                    layersToRemove.push(layer);
+                }
+            });
+            // 収集したレイヤーを削除
+            layersToRemove.forEach((layer) => {
+                try {
+                    if (map.hasLayer(layer)) {
+                        map.removeLayer(layer);
+                        console.log(
+                            `[重複レイヤー削除] ${layer._edgeId}の重複レイヤーを削除しました`
+                        );
+                    }
+                } catch (e) {
+                    console.warn('重複レイヤーの削除でエラー:', e);
+                }
+            });
 
             // テキストファイルを読み込む
             const textFilePath = `/api/main_server_route/static/${directory}/${fileName}`;
@@ -1386,17 +1679,21 @@ export default function Home() {
 
             const textContent = await textResponse.text();
             console.log(`[テキスト内容] ${textContent.substring(0, 100)}...`);
-            const geojsonFileNames = textContent
+            const allGeojsonFileNames = textContent
                 .split('\n')
                 .map((line) => line.trim())
                 .filter((line) => line !== '' && line.endsWith('.geojson'));
 
-            console.log(`[GeoJSONファイル数] ${geojsonFileNames.length}個`);
+            console.log(`[GeoJSONファイル数] ${allGeojsonFileNames.length}個`);
+
+            // 一旦、全ての経路を表示する（フィルタリングを無効化して動作確認）
+            const geojsonFileNames = allGeojsonFileNames;
+            console.log(`[フィルタリング後] 全ての経路を表示: ${geojsonFileNames.length}個`);
 
             // Leafletを動的にインポート
             const L = await import('leaflet');
 
-            // 全てのGeoJSONファイルを読み込んで結合
+            // 終点から最後までのGeoJSONファイルを読み込んで結合
             const geojsonFeatures: any[] = [];
             const geojsonFolder = 'oomiya_line/';
 
@@ -1434,12 +1731,35 @@ export default function Home() {
 
             if (geojsonFeatures.length > 0) {
                 // 念のため、既存のレイヤーが残っていないか再度確認して削除
+                // 全ての紫色の経路レイヤーを削除
+                const keysToDeleteRecheck: string[] = [];
+                routeLayersRef.current.forEach((layer, key) => {
+                    keysToDeleteRecheck.push(key);
+                    try {
+                        if (map.hasLayer(layer)) {
+                            map.removeLayer(layer);
+                            console.log(
+                                `[既存レイヤー削除（再確認）] ${key}のレイヤーを削除しました`
+                            );
+                        }
+                    } catch (e) {
+                        console.warn(`既存レイヤーの削除（再確認）でエラー (${key}):`, e);
+                    }
+                });
+                // 全てのキーを削除
+                keysToDeleteRecheck.forEach((key) => {
+                    routeLayersRef.current.delete(key);
+                });
+
+                // 後方互換性のため
                 if (slider194_195RouteLayerRef.current) {
                     try {
                         const oldLayer = slider194_195RouteLayerRef.current;
                         if (map.hasLayer(oldLayer)) {
                             map.removeLayer(oldLayer);
-                            console.log('[既存レイヤー削除（再確認）] レイヤーを削除しました');
+                            console.log(
+                                '[既存レイヤー削除（再確認）] 後方互換レイヤーを削除しました'
+                            );
                         }
                     } catch (e) {
                         console.warn('既存レイヤーの削除（再確認）でエラー:', e);
@@ -1447,18 +1767,67 @@ export default function Home() {
                     slider194_195RouteLayerRef.current = null;
                 }
 
+                // 念のため、マップ上の全てのレイヤーを確認して、紫色の経路レイヤーを削除（再確認）
+                // 削除するレイヤーのリストを先に収集
+                const layersToRemoveRecheck: any[] = [];
+                map.eachLayer((layer: any) => {
+                    if (layer._edgeId) {
+                        // _edgeIdが設定されているレイヤーは紫色の経路レイヤー
+                        layersToRemoveRecheck.push(layer);
+                    }
+                });
+                // 収集したレイヤーを削除
+                layersToRemoveRecheck.forEach((layer) => {
+                    try {
+                        if (map.hasLayer(layer)) {
+                            map.removeLayer(layer);
+                            console.log(
+                                `[重複レイヤー削除（再確認）] ${layer._edgeId}の重複レイヤーを削除しました`
+                            );
+                        }
+                    } catch (e) {
+                        console.warn('重複レイヤーの削除（再確認）でエラー:', e);
+                    }
+                });
+
                 // GeoJSONレイヤーを作成（紫色で表示）
                 const routeLayer = L.default.geoJSON(geojsonFeatures, {
                     style: {
                         color: '#9333ea', // 紫色
-                        weight: 8,
-                        opacity: 0.8,
+                        weight: 12, // 太くして見やすく
+                        opacity: 1.0, // 不透明度を最大に
                     },
                 });
+                // レイヤーにedgeIdとsliderTypeを保存して識別できるようにする
+                (routeLayer as any)._edgeId = edgeId;
+                (routeLayer as any)._sliderType = sliderType;
 
+                console.log(
+                    `[経路レイヤー作成] ${edgeId}: ${geojsonFeatures.length}個のFeatureを含む`
+                );
+                if (geojsonFeatures.length > 0) {
+                    console.log(
+                        `[経路レイヤー詳細] 最初のFeatureの座標:`,
+                        geojsonFeatures[0]?.geometry?.coordinates
+                    );
+                }
                 routeLayer.addTo(map);
-                slider194_195RouteLayerRef.current = routeLayer;
-                console.log('[経路レイヤー追加完了]');
+                console.log(`[経路レイヤー追加] ${edgeId}: マップに追加しました`);
+                // マップの境界を確認
+                const bounds = routeLayer.getBounds();
+                if (bounds.isValid()) {
+                    console.log(`[経路レイヤー境界] ${edgeId}:`, bounds.toBBoxString());
+                    // マップのビューを経路に合わせる（オプション）
+                    // map.fitBounds(bounds);
+                }
+                // edgeIdとsliderTypeを組み合わせたキーで保存
+                const layerKey = `${edgeId}-${sliderType}`;
+                routeLayersRef.current.set(layerKey, routeLayer);
+                // 後方互換性のため（194-195の場合のみ）
+                if (edgeId === '194-195') {
+                    slider194_195RouteLayerRef.current = routeLayer;
+                }
+                console.log(`[経路レイヤー追加完了] ${edgeId}: レイヤー参照を保存しました`);
             } else {
                 console.warn('[警告] 読み込んだFeatureが0個です');
             }
