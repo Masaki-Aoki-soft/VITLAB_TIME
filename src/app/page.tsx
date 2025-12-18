@@ -68,6 +68,7 @@ export default function Home() {
     const slider194_195ClickCountRef = useRef<number>(0); // クリック回数をカウント
     const slider194_195RouteLayerRef = useRef<L.GeoJSON | null>(null); // 194-195の経路レイヤー
     const zoomTimeoutRef = useRef<NodeJS.Timeout | null>(null); // ズーム時のデバウンス用
+    const isRedrawingRef = useRef<boolean>(false); // 再描画中かどうかのフラグ
     const [selectedRouteInfo, setSelectedRouteInfo] = useState<RouteResult | null>(null);
     const [startMarker, setStartMarker] = useState<{
         position: [number, number];
@@ -733,9 +734,12 @@ export default function Home() {
     };
 
     // 194-195にスライダーを表示する関数（page.tsx内で直接管理）
-    const showSliderOn194_195 = useCallback(async () => {
+    const showSliderOn194_195 = useCallback(async (isRedrawing: boolean = false) => {
         // ブラウザ環境でのみ実行
         if (typeof window === 'undefined') return;
+
+        // 再描画時かどうかを設定
+        isRedrawingRef.current = isRedrawing;
 
         // 既に作成中の場合は、少し待ってから再試行
         if (slider194_195CreatingRef.current) {
@@ -781,7 +785,11 @@ export default function Home() {
             slider194_195MarkersRef.current = [];
 
             // 既存の194-195経路レイヤーを削除
-            if (slider194_195RouteLayerRef.current) {
+            // 信号をクリックしたときは常に経路を非表示にする
+            // ※スライダー再描画時（ズーム・移動時）は経路を残したいので、
+            //   再描画時（isRedrawingRef.current === true）は経路を削除しない
+            //   信号クリック時（isRedrawingRef.current === false）は経路を削除
+            if (slider194_195RouteLayerRef.current && !isRedrawingRef.current) {
                 try {
                     map.removeLayer(slider194_195RouteLayerRef.current);
                 } catch (e) {
@@ -909,6 +917,8 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
                             }
                             #${slider1Id}::-moz-range-thumb {
                                 width: 16px;
@@ -918,6 +928,14 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
+                            }
+                            #${slider1Id}.thumb-visible::-webkit-slider-thumb {
+                                opacity: 1;
+                            }
+                            #${slider1Id}.thumb-visible::-moz-range-thumb {
+                                opacity: 1;
                             }
                             #${slider1Id}::-webkit-slider-runnable-track {
                                 background: linear-gradient(to right, #3b82f6 0%, #ffffff 50%, #3b82f6 100%);
@@ -979,6 +997,8 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
                             }
                             #${slider2Id}::-moz-range-thumb {
                                 width: 16px;
@@ -988,6 +1008,14 @@ export default function Home() {
                                 border-radius: 50%;
                                 cursor: pointer;
                                 box-shadow: 0 2px 4px rgba(0,0,0,0.3);
+                                opacity: 0;
+                                transition: opacity 0.2s;
+                            }
+                            #${slider2Id}.thumb-visible::-webkit-slider-thumb {
+                                opacity: 1;
+                            }
+                            #${slider2Id}.thumb-visible::-moz-range-thumb {
+                                opacity: 1;
                             }
                             #${slider2Id}::-webkit-slider-runnable-track {
                                 background: linear-gradient(to right, #ef4444 0%, #ffffff 50%, #ef4444 100%);
@@ -1050,6 +1078,11 @@ export default function Home() {
                     const handleMouseDown = (e: MouseEvent) => {
                         isDragging = true;
                         disableMapDragging();
+                        // スライダーのハンドルを表示
+                        sliderElement.classList.add('thumb-visible');
+                        // クリック時に現在の値で経路を表示
+                        const currentValue = parseInt(sliderElement.value);
+                        handleSlider194_195Change(currentValue, 1);
                         e.stopPropagation();
                         e.stopImmediatePropagation();
                     };
@@ -1148,6 +1181,11 @@ export default function Home() {
                     const handleMouseDown = (e: MouseEvent) => {
                         isDragging = true;
                         disableMapDragging();
+                        // スライダーのハンドルを表示
+                        sliderElement.classList.add('thumb-visible');
+                        // クリック時に現在の値で経路を表示
+                        const currentValue = parseInt(sliderElement.value);
+                        handleSlider194_195Change(currentValue, 2);
                         e.stopPropagation();
                         e.stopImmediatePropagation();
                     };
@@ -1232,9 +1270,7 @@ export default function Home() {
             slider194_195TypeRef.current = 'blue';
             setSlider194_195Type('blue');
 
-            // 初期値の経路を表示
-            const initialValue = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
-            handleSlider194_195Change(initialValue, 1);
+            // 初期値の経路は表示しない（スライダーを動かしてから表示）
 
             // 左上に切り替えボタンを追加
             const toggleButtonId = '194-195-toggle-button';
@@ -1328,6 +1364,7 @@ export default function Home() {
             slider194_195VisibleRef.current = false;
         } finally {
             slider194_195CreatingRef.current = false;
+            isRedrawingRef.current = false;
         }
     }, []);
 
