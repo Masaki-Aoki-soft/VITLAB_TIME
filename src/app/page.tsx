@@ -1323,10 +1323,19 @@ export default function Home() {
                     toggleButton.textContent = '青色に切り替え';
                     toggleButton.style.background = '#3b82f6';
 
-                    // 赤色のスライダー値で経路を更新
-                    const slider2Key = '194-195-slider2';
-                    const currentValue2 = slider194_195ValuesRef.current.get(slider2Key) ?? 0;
-                    handleSlider194_195Change(currentValue2, 2);
+                    // 経路は表示しない（スライダーを動かしてから表示）
+                    // 既存の経路を削除
+                    if (slider194_195RouteLayerRef.current) {
+                        try {
+                            const routeLayer = slider194_195RouteLayerRef.current;
+                            if (map.hasLayer(routeLayer)) {
+                                map.removeLayer(routeLayer);
+                            }
+                        } catch (e) {
+                            console.warn('経路レイヤーの削除でエラー:', e);
+                        }
+                        slider194_195RouteLayerRef.current = null;
+                    }
                 } else {
                     // 赤色から青色に切り替え
                     if (map.hasLayer(slider2Marker)) {
@@ -1340,10 +1349,19 @@ export default function Home() {
                     toggleButton.textContent = '赤色に切り替え';
                     toggleButton.style.background = '#ef4444';
 
-                    // 青色のスライダー値で経路を更新
-                    const slider1Key = '194-195-slider1';
-                    const currentValue1 = slider194_195ValuesRef.current.get(slider1Key) ?? 0;
-                    handleSlider194_195Change(currentValue1, 1);
+                    // 経路は表示しない（スライダーを動かしてから表示）
+                    // 既存の経路を削除
+                    if (slider194_195RouteLayerRef.current) {
+                        try {
+                            const routeLayer = slider194_195RouteLayerRef.current;
+                            if (map.hasLayer(routeLayer)) {
+                                map.removeLayer(routeLayer);
+                            }
+                        } catch (e) {
+                            console.warn('経路レイヤーの削除でエラー:', e);
+                        }
+                        slider194_195RouteLayerRef.current = null;
+                    }
                 }
             });
 
