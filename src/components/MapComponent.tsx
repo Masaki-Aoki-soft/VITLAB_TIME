@@ -101,7 +101,8 @@ interface MapComponentProps {
     intersectionPins?: IntersectionPin[];
     onIntersectionPinClick?: (nodeId: string, position: [number, number]) => void;
     pinSelectionState?: 'none' | 'start' | 'end';
-    onSlider194_195Change?: (distance: number, sliderType: number) => void;
+    // 194-195 専用のスライダー用コールバック（現状は未使用・page.tsx 側で直接処理）
+    onSlider194_195Change?: (edgeId: string, distance: number, sliderType: number) => void;
     onShowSlider194_195?: (isRedrawing?: boolean) => void;
     slider194_195VisibleRef?: React.MutableRefObject<boolean>;
     slider194_195CreatingRef?: React.MutableRefObject<boolean>;
