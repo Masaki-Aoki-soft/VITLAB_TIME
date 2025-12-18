@@ -63,6 +63,8 @@ COPY --from=builder --chown=nextjs:nodejs /app/*.geojson ./
 COPY --from=builder --chown=nextjs:nodejs /app/*.txt ./
 COPY --from=builder --chown=nextjs:nodejs /app/saving_route ./saving_route
 COPY --from=builder --chown=nextjs:nodejs /app/signal_inf.csv ./
+COPY --from=builder --chown=nextjs:nodejs /app/194-195_green ./194-195_green
+COPY --from=builder --chown=nextjs:nodejs /app/194-195_red ./194-195_red
 
 # ユーザーを変更
 USER nextjs
