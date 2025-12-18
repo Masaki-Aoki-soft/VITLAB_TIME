@@ -63,8 +63,19 @@ COPY --from=builder --chown=nextjs:nodejs /app/*.geojson ./
 COPY --from=builder --chown=nextjs:nodejs /app/*.txt ./
 COPY --from=builder --chown=nextjs:nodejs /app/saving_route ./saving_route
 COPY --from=builder --chown=nextjs:nodejs /app/signal_inf.csv ./
+# _greenと_redで終わる全てのディレクトリを個別にコピー
+COPY --from=builder --chown=nextjs:nodejs /app/18-22_green ./18-22_green
+COPY --from=builder --chown=nextjs:nodejs /app/18-22_red ./18-22_red
+COPY --from=builder --chown=nextjs:nodejs /app/192-194_green ./192-194_green
+COPY --from=builder --chown=nextjs:nodejs /app/192-194_red ./192-194_red
 COPY --from=builder --chown=nextjs:nodejs /app/194-195_green ./194-195_green
 COPY --from=builder --chown=nextjs:nodejs /app/194-195_red ./194-195_red
+COPY --from=builder --chown=nextjs:nodejs /app/197-199_green ./197-199_green
+COPY --from=builder --chown=nextjs:nodejs /app/197-199_red ./197-199_red
+COPY --from=builder --chown=nextjs:nodejs /app/22-25_green ./22-25_green
+COPY --from=builder --chown=nextjs:nodejs /app/22_25_red ./22_25_red
+COPY --from=builder --chown=nextjs:nodejs /app/26-195_green ./26-195_green
+COPY --from=builder --chown=nextjs:nodejs /app/26-195_red ./26-195_red
 
 # ユーザーを変更
 USER nextjs
