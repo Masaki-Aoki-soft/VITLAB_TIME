@@ -70,6 +70,7 @@ export default function Home() {
     const slider194_195RouteLayerRef = useRef<L.GeoJSON | null>(null); // 194-195の経路レイヤー（紫）（後方互換性のため残す）
     const routeLayersRef = useRef<Map<string, L.GeoJSON>>(new Map()); // 各edgeIdごとの経路レイヤー（紫）
     const zoomTimeoutRef = useRef<NodeJS.Timeout | null>(null); // ズーム時のデバウンス用
+    const activeSliderIdRef = useRef<string | null>(null); // 現在アクティブなスライダーのID（黄色表示用）
     const isRedrawingRef = useRef<boolean>(false); // 再描画中かどうかのフラグ
     const [selectedRouteInfo, setSelectedRouteInfo] = useState<RouteResult | null>(null);
     const [startMarker, setStartMarker] = useState<{
@@ -670,6 +671,8 @@ export default function Home() {
             slider194_195VisibleRef.current = false;
             slider194_195TypeRef.current = 'blue';
             setSlider194_195Type('blue');
+            // アクティブなスライダーのrefをクリア
+            activeSliderIdRef.current = null;
         }
     };
 
@@ -821,6 +824,16 @@ export default function Home() {
                 }
             });
             slider194_195MarkersRef.current = [];
+            // アクティブなスライダーのrefをクリア
+            if (activeSliderIdRef.current) {
+                const previousContainerElement = document.getElementById(
+                    activeSliderIdRef.current
+                ) as HTMLDivElement;
+                if (previousContainerElement) {
+                    previousContainerElement.classList.remove('slider-active');
+                }
+                activeSliderIdRef.current = null;
+            }
 
             // 既存の経路レイヤーを削除（※再描画時は残す）
             if (!isRedrawingRef.current) {
@@ -952,16 +965,20 @@ export default function Home() {
                     edgeId === '26-195' || edgeId === '197-199' ? pixelLength * 0.93 : pixelLength;
 
                 // 1つ目のスライダー（青と白）
+                const slider1ContainerId = `${edgeId}-slider-1-container`;
                 const slider1DivIcon = L.default.divIcon({
                     className: 'route-weight-slider',
                     html: `
-                    <div style="
+                    <div id="${slider1ContainerId}" style="
                         transform: rotate(${angle}deg);
                         transform-origin: center center;
                         pointer-events: auto;
                         display: flex;
                         align-items: center;
                         justify-content: center;
+                        padding: 2px;
+                        border-radius: 5px;
+                        transition: border 0.2s;
                     ">
                         <input
                             type="range"
@@ -1014,6 +1031,34 @@ export default function Home() {
                             #${slider1Id}.thumb-visible::-moz-range-thumb {
                                 opacity: 1;
                             }
+                            #${slider1Id}.thumb-active::-webkit-slider-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
+                            #${slider1Id}.thumb-active::-moz-range-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
+                            #${slider1Id}.thumb-visible.thumb-active::-webkit-slider-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
+                            #${slider1Id}.thumb-visible.thumb-active::-moz-range-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
                             #${slider1Id}::-webkit-slider-runnable-track {
                                 background: #3b82f6;
                                 height: 6px;
@@ -1024,6 +1069,10 @@ export default function Home() {
                                 height: 6px;
                                 border-radius: 3px;
                             }
+                            #${slider1ContainerId}.slider-active {
+                                border: 5px solid #ff6600 !important;
+                                box-shadow: 0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6) !important;
+                            }
                         </style>
                     </div>
                 `,
@@ -1032,16 +1081,20 @@ export default function Home() {
                 });
 
                 // 2つ目のスライダー（赤と白）
+                const slider2ContainerId = `${edgeId}-slider-2-container`;
                 const slider2DivIcon = L.default.divIcon({
                     className: 'route-weight-slider',
                     html: `
-                    <div style="
+                    <div id="${slider2ContainerId}" style="
                         transform: rotate(${angle}deg);
                         transform-origin: center center;
                         pointer-events: auto;
                         display: flex;
                         align-items: center;
                         justify-content: center;
+                        padding: 2px;
+                        border-radius: 5px;
+                        transition: border 0.2s;
                     ">
                         <input
                             type="range"
@@ -1094,6 +1147,34 @@ export default function Home() {
                             #${slider2Id}.thumb-visible::-moz-range-thumb {
                                 opacity: 1;
                             }
+                            #${slider2Id}.thumb-active::-webkit-slider-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
+                            #${slider2Id}.thumb-active::-moz-range-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
+                            #${slider2Id}.thumb-visible.thumb-active::-webkit-slider-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
+                            #${slider2Id}.thumb-visible.thumb-active::-moz-range-thumb {
+                                background: #fbbf24 !important;
+                                border-color: #f59e0b !important;
+                                opacity: 1 !important;
+                                width: 18px !important;
+                                height: 18px !important;
+                            }
                             #${slider2Id}::-webkit-slider-runnable-track {
                                 background: #ef4444;
                                 height: 6px;
@@ -1103,6 +1184,10 @@ export default function Home() {
                                 background: #ef4444;
                                 height: 6px;
                                 border-radius: 3px;
+                            }
+                            #${slider2ContainerId}.slider-active {
+                                border: 5px solid #ff6600 !important;
+                                box-shadow: 0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6) !important;
                             }
                         </style>
                     </div>
@@ -1139,6 +1224,15 @@ export default function Home() {
                             slider1Id
                         ) as HTMLInputElement;
                         if (!sliderElement) return;
+
+                        // アクティブなスライダーの場合、スタイルを再適用
+                        const containerElement = sliderElement.parentElement as HTMLDivElement;
+                        if (containerElement && activeSliderIdRef.current === slider1ContainerId) {
+                            containerElement.classList.add('slider-active');
+                            containerElement.style.border = '5px solid #ff6600';
+                            containerElement.style.boxShadow =
+                                '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+                        }
 
                         let isDragging = false;
 
@@ -1237,6 +1331,23 @@ export default function Home() {
                     }, 100);
                 });
 
+                // マーカーのupdateイベントでスタイルを再適用
+                slider1Marker.on('update', () => {
+                    setTimeout(() => {
+                        if (activeSliderIdRef.current === slider1ContainerId) {
+                            const containerElement = document.getElementById(
+                                slider1ContainerId
+                            ) as HTMLDivElement;
+                            if (containerElement) {
+                                containerElement.classList.add('slider-active');
+                                containerElement.style.border = '5px solid #ff6600';
+                                containerElement.style.boxShadow =
+                                    '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+                            }
+                        }
+                    }, 50);
+                });
+
                 // 2つ目のスライダーのイベントリスナー（赤）
                 slider2Marker.on('add', () => {
                     setTimeout(() => {
@@ -1244,6 +1355,15 @@ export default function Home() {
                             slider2Id
                         ) as HTMLInputElement;
                         if (!sliderElement) return;
+
+                        // アクティブなスライダーの場合、スタイルを再適用
+                        const containerElement = sliderElement.parentElement as HTMLDivElement;
+                        if (containerElement && activeSliderIdRef.current === slider2ContainerId) {
+                            containerElement.classList.add('slider-active');
+                            containerElement.style.border = '5px solid #ff6600';
+                            containerElement.style.boxShadow =
+                                '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+                        }
 
                         let isDragging = false;
 
@@ -1340,6 +1460,23 @@ export default function Home() {
                             handleSlider194_195Change(edgeId, value, 2);
                         });
                     }, 100);
+                });
+
+                // マーカーのupdateイベントでスタイルを再適用
+                slider2Marker.on('update', () => {
+                    setTimeout(() => {
+                        if (activeSliderIdRef.current === slider2ContainerId) {
+                            const containerElement = document.getElementById(
+                                slider2ContainerId
+                            ) as HTMLDivElement;
+                            if (containerElement) {
+                                containerElement.classList.add('slider-active');
+                                containerElement.style.border = '5px solid #ff6600';
+                                containerElement.style.boxShadow =
+                                    '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+                            }
+                        }
+                    }, 50);
                 });
 
                 allBlueMarkers.push(slider1Marker);
@@ -1526,6 +1663,21 @@ export default function Home() {
                 }
                 mapContainer.appendChild(toggleButtonContainer);
             }
+
+            // アクティブなスライダーのスタイルを再適用（マップ移動後にもスタイルを保持）
+            if (activeSliderIdRef.current) {
+                setTimeout(() => {
+                    const activeContainerElement = document.getElementById(
+                        activeSliderIdRef.current!
+                    ) as HTMLDivElement;
+                    if (activeContainerElement) {
+                        activeContainerElement.classList.add('slider-active');
+                        activeContainerElement.style.border = '5px solid #ff6600';
+                        activeContainerElement.style.boxShadow =
+                            '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+                    }
+                }, 100);
+            }
         } catch (error) {
             console.error('194-195のスライダー表示エラー:', error);
             slider194_195VisibleRef.current = false;
@@ -1534,6 +1686,79 @@ export default function Home() {
             isRedrawingRef.current = false;
         }
     }, []);
+
+    // アクティブなスライダーのスタイルを再適用する関数
+    const reapplyActiveSliderStyle = useCallback(() => {
+        if (!activeSliderIdRef.current) return;
+
+        const containerId = activeSliderIdRef.current;
+
+        // 複数の方法で要素を検索
+        let containerElement = document.getElementById(containerId) as HTMLDivElement;
+        if (!containerElement) {
+            containerElement = document.querySelector(`[id="${containerId}"]`) as HTMLDivElement;
+        }
+        // input要素から親を取得する方法も試す
+        if (!containerElement) {
+            const edgeId = containerId
+                .replace('-slider-1-container', '')
+                .replace('-slider-2-container', '');
+            const sliderType = containerId.includes('-slider-1-') ? 1 : 2;
+            const sliderInputId = `${edgeId}-slider-${sliderType}`;
+            const sliderInput = document.getElementById(sliderInputId) as HTMLInputElement;
+            if (sliderInput && sliderInput.parentElement) {
+                containerElement = sliderInput.parentElement as HTMLDivElement;
+            }
+        }
+
+        if (containerElement) {
+            containerElement.classList.add('slider-active');
+            // より目立つ色で適用（濃いオレンジ/黄色で、より太いボーダー）
+            containerElement.style.border = '5px solid #ff6600';
+            containerElement.style.boxShadow =
+                '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+        }
+    }, []);
+
+    // マップのズーム・パンイベントを監視して、アクティブなスライダーのスタイルを再適用
+    useEffect(() => {
+        const map = mapRef.current;
+        if (!map) return;
+
+        const handleMapMove = () => {
+            // 少し遅延させて再適用（DOM更新を待つ）
+            setTimeout(() => {
+                reapplyActiveSliderStyle();
+            }, 100);
+        };
+
+        map.on('zoomend', handleMapMove);
+        map.on('moveend', handleMapMove);
+        map.on('viewreset', handleMapMove);
+        map.on('zoom', handleMapMove);
+        map.on('move', handleMapMove);
+
+        return () => {
+            map.off('zoomend', handleMapMove);
+            map.off('moveend', handleMapMove);
+            map.off('viewreset', handleMapMove);
+            map.off('zoom', handleMapMove);
+            map.off('move', handleMapMove);
+        };
+    }, [reapplyActiveSliderStyle]);
+
+    // 定期的にアクティブなスライダーのスタイルをチェック（マップ移動時にも確実に適用）
+    useEffect(() => {
+        const intervalId = setInterval(() => {
+            if (activeSliderIdRef.current) {
+                reapplyActiveSliderStyle();
+            }
+        }, 200); // 200msごとにチェック
+
+        return () => {
+            clearInterval(intervalId);
+        };
+    }, [reapplyActiveSliderStyle]);
 
     // 194-195 のスライダー変更時の処理
     // 他の経路（22-25 など）は、現状は UI のみで紫の経路は描画しない
@@ -1551,6 +1776,104 @@ export default function Home() {
         console.log(
             `[スライダー変更] edgeId: ${edgeId}, distance: ${distance}, sliderType: ${sliderType}`
         );
+
+        // 以前のアクティブなスライダーの外枠を元に戻す
+        if (activeSliderIdRef.current) {
+            // IDで検索を試みる
+            let previousContainerElement = document.getElementById(
+                activeSliderIdRef.current
+            ) as HTMLDivElement;
+
+            // IDで見つからない場合は、querySelectorで検索
+            if (!previousContainerElement) {
+                previousContainerElement = document.querySelector(
+                    `#${activeSliderIdRef.current.replace(/[.#]/g, '\\$&')}`
+                ) as HTMLDivElement;
+            }
+
+            if (previousContainerElement) {
+                previousContainerElement.classList.remove('slider-active');
+                // インラインスタイルを確実に削除
+                previousContainerElement.style.removeProperty('border');
+                previousContainerElement.style.removeProperty('box-shadow');
+                console.log(
+                    `[スライダー] ${activeSliderIdRef.current}のslider-activeスタイルを削除しました`
+                );
+            }
+        }
+
+        // 新しいアクティブなスライダーのコンテナIDを生成
+        const newActiveSliderContainerId = `${edgeId}-slider-${sliderType}-container`;
+        const newActiveSliderId = `${edgeId}-slider-${sliderType}`;
+
+        // input要素から親のコンテナ要素を取得する関数
+        const findAndUpdateSliderContainer = () => {
+            // まずinput要素を検索
+            const sliderInputElement = document.getElementById(
+                newActiveSliderId
+            ) as HTMLInputElement;
+            let newSliderContainerElement: HTMLDivElement | null = null;
+
+            if (sliderInputElement) {
+                // 親要素（コンテナ）を取得
+                newSliderContainerElement = sliderInputElement.parentElement as HTMLDivElement;
+                console.log(
+                    `[スライダー] input要素から親要素を取得:`,
+                    newSliderContainerElement?.id
+                );
+            }
+
+            // 親要素が見つからない場合は、IDで直接検索
+            if (!newSliderContainerElement || !newSliderContainerElement.id) {
+                newSliderContainerElement = document.getElementById(
+                    newActiveSliderContainerId
+                ) as HTMLDivElement;
+                console.log(`[スライダー] IDで直接検索:`, newSliderContainerElement?.id);
+            }
+
+            // それでも見つからない場合は、querySelectorで検索
+            if (!newSliderContainerElement) {
+                newSliderContainerElement = document.querySelector(
+                    `[id="${newActiveSliderContainerId}"]`
+                ) as HTMLDivElement;
+                console.log(`[スライダー] querySelectorで検索:`, newSliderContainerElement?.id);
+            }
+
+            if (newSliderContainerElement) {
+                newSliderContainerElement.classList.add('slider-active');
+                // インラインスタイルも直接適用（確実に動作するように）- より目立つ色に変更
+                newSliderContainerElement.style.border = '5px solid #ff6600';
+                newSliderContainerElement.style.boxShadow =
+                    '0 0 20px rgba(255, 102, 0, 1), 0 0 10px rgba(255, 102, 0, 0.9), inset 0 0 8px rgba(255, 102, 0, 0.6)';
+                activeSliderIdRef.current = newActiveSliderContainerId;
+                console.log(
+                    `[スライダー] ${newActiveSliderContainerId}にslider-activeスタイルを適用しました`
+                );
+                return true;
+            } else {
+                console.warn(
+                    `[スライダー] スライダーコンテナ要素が見つかりません。ID: ${newActiveSliderContainerId}, input ID: ${newActiveSliderId}`
+                );
+                // デバッグ: すべてのコンテナ要素を検索
+                const allContainers = document.querySelectorAll('[id*="slider"][id*="container"]');
+                console.log(
+                    `[スライダー] 見つかったすべてのコンテナ要素:`,
+                    Array.from(allContainers).map((el) => el.id)
+                );
+                return false;
+            }
+        };
+
+        // 即座に試行
+        if (!findAndUpdateSliderContainer()) {
+            // 見つからない場合は、少し遅延させて再試行
+            setTimeout(() => {
+                if (!findAndUpdateSliderContainer()) {
+                    // さらに遅延させて再試行
+                    setTimeout(findAndUpdateSliderContainer, 100);
+                }
+            }, 50);
+        }
 
         // 全てのedgeIdで経路描画をサポート
         const supportedEdgeIds = ['194-195', '192-194', '22-25', '18-22', '26-195', '197-199'];
