@@ -2199,8 +2199,8 @@ export default function Home() {
             >
                 <div className="max-w-8xl mx-auto space-y-6">
                     {/* 表示データと経路情報 */}
-                    <div className="grid grid-cols-2 gap-4">
-                        <div className="glass-effect rounded-xl p-6">
+                    <div className="grid grid-cols-5 gap-4">
+                        <div className="col-span-2 glass-effect rounded-xl p-6">
                             <h3 className="text-white font-semibold text-lg mb-4 flex items-center gap-2">
                                 <i className="fas fa-eye text-yellow-300"></i>
                                 表示データ
@@ -2209,90 +2209,90 @@ export default function Home() {
                                 <button
                                     onClick={viewAREA}
                                     disabled={isLoading}
-                                    className="bg-gray-600 hover:bg-gray-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-gray-600 hover:bg-gray-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     対象範囲
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('sidewalk', 'red')}
                                     disabled={isLoading}
-                                    className="bg-red-600 hover:bg-red-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-red-600 hover:bg-red-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     歩道
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('signal', 'blue')}
                                     disabled={isLoading}
-                                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-blue-600 hover:bg-blue-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     信号
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('road_width1', 'purple')}
                                     disabled={isLoading}
-                                    className="bg-purple-600 hover:bg-purple-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-purple-600 hover:bg-purple-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     道路幅1
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('road_width2', 'brown')}
                                     disabled={isLoading}
-                                    className="bg-yellow-700 hover:bg-yellow-600 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-yellow-700 hover:bg-yellow-600 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     道路幅2
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('road_width3', 'darkgreen')}
                                     disabled={isLoading}
-                                    className="bg-green-700 hover:bg-green-600 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-green-700 hover:bg-green-600 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     道路幅3
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('illumination', 'orange')}
                                     disabled={isLoading}
-                                    className="bg-orange-600 hover:bg-orange-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-orange-600 hover:bg-orange-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     照明
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('nature', 'green')}
                                     disabled={isLoading}
-                                    className="bg-green-600 hover:bg-green-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-green-600 hover:bg-green-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     自然
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('park', 'red')}
                                     disabled={isLoading}
-                                    className="bg-red-700 hover:bg-red-600 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-red-700 hover:bg-red-600 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     公園
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('garbage', 'orange')}
                                     disabled={isLoading}
-                                    className="bg-orange-500 hover:bg-orange-400 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-orange-500 hover:bg-orange-400 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     ごみ
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('toilet', '#ff1493')}
                                     disabled={isLoading}
-                                    className="bg-pink-600 hover:bg-pink-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-pink-600 hover:bg-pink-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     トイレ
                                 </button>
                                 <button
                                     onClick={() => displayDataFromCSV('crosswalk', 'red')}
                                     disabled={isLoading}
-                                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs py-2 px-2 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    className="bg-indigo-600 hover:bg-indigo-500 text-white text-xs py-2 px-1 rounded-lg transition-all duration-200 hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed"
                                 >
                                     横断歩道
                                 </button>
                             </div>
                         </div>
-                        <div className="col-span-1 flex flex-col">
+                        <div className="col-span-3 flex flex-col">
                             <div className="glass-effect rounded-xl p-4 flex-grow">
                                 <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                                     <i className="fas fa-info-circle text-yellow-300"></i>
@@ -2446,88 +2446,10 @@ export default function Home() {
                                     </div>
                                 </div>
                             </div>
-
-                            {/* 勾配制限 */}
-                            <div className="glass-effect rounded-xl p-3">
-                                <h3 className="text-white font-semibold text-lg mb-1 flex items-center gap-2">
-                                    <i className="fas fa-mountain text-yellow-300"></i>
-                                    勾配制限
-                                </h3>
-                                <div className="space-y-1">
-                                    <div>
-                                        <label className="block text-white/90 text-sm font-medium">
-                                            上りの最大勾配 (m/m)
-                                        </label>
-                                        <div className="flex items-center gap-3">
-                                            <input
-                                                type="range"
-                                                value={weights.weight2}
-                                                min="0"
-                                                max="100"
-                                                step="0.1"
-                                                onChange={(e) =>
-                                                    setWeights({
-                                                        ...weights,
-                                                        weight2: parseFloat(e.target.value),
-                                                    })
-                                                }
-                                                disabled={isLoading}
-                                                className="range-slider flex-1 h-2 bg-white/20 rounded-full appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                                            />
-                                            <input
-                                                type="text"
-                                                value={weights.weight2}
-                                                onChange={(e) =>
-                                                    setWeights({
-                                                        ...weights,
-                                                        weight2: parseFloat(e.target.value) || 0,
-                                                    })
-                                                }
-                                                disabled={isLoading}
-                                                className="w-16 px-2 py-1 text-xs text-center rounded bg-white/20 text-white border border-white/30 focus:border-yellow-300 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                                            />
-                                        </div>
-                                    </div>
-                                    <div>
-                                        <label className="block text-white/90 text-sm font-medium">
-                                            下りの最大勾配 (m/m)
-                                        </label>
-                                        <div className="flex items-center gap-3">
-                                            <input
-                                                type="range"
-                                                value={weights.weight3}
-                                                min="-100"
-                                                max="0"
-                                                step="0.1"
-                                                onChange={(e) =>
-                                                    setWeights({
-                                                        ...weights,
-                                                        weight3: parseFloat(e.target.value),
-                                                    })
-                                                }
-                                                disabled={isLoading}
-                                                className="range-slider flex-1 h-2 bg-white/20 rounded-full appearance-none cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
-                                            />
-                                            <input
-                                                type="text"
-                                                value={weights.weight3}
-                                                onChange={(e) =>
-                                                    setWeights({
-                                                        ...weights,
-                                                        weight3: parseFloat(e.target.value) || 0,
-                                                    })
-                                                }
-                                                disabled={isLoading}
-                                                className="w-16 px-2 py-1 text-xs text-center rounded bg-white/20 text-white border border-white/30 focus:border-yellow-300 focus:outline-none disabled:opacity-50 disabled:cursor-not-allowed"
-                                            />
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
 
                         {/* 中央：マップ */}
-                        <div className="lg:col-span-6">
+                        <div className="lg:col-span-7">
                             <MapComponent
                                 mapRef={mapRef}
                                 routeLayers={routeLayers}
@@ -2549,12 +2471,16 @@ export default function Home() {
                                 slider194_195VisibleRef={slider194_195VisibleRef}
                                 slider194_195CreatingRef={slider194_195CreatingRef}
                             />
+                        </div>
+
+                        {/* 右側：計算実行 */}
+                        <div className="lg:col-span-2">
                             <div className="glass-effect rounded-xl p-4 flex flex-col">
                                 <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                                     <i className="fas fa-play-circle text-yellow-300"></i>
                                     計算実行
                                 </h3>
-                                <div className="grid grid-cols-3 gap-2">
+                                <div className="grid grid-cols-1 gap-2">
                                     <button
                                         onClick={loadRouteFromCSV}
                                         disabled={isLoading}
@@ -2577,132 +2503,6 @@ export default function Home() {
                                         <i className="fas fa-trash"></i>クリア
                                     </button>
                                 </div>
-                            </div>
-                        </div>
-
-                        {/* 右側：重み設定 */}
-                        <div className="glass-effect rounded-xl p-4 lg:col-span-3">
-                            <h3 className="text-white font-semibold text-xl mb-4 flex items-center gap-2">
-                                <i className="fas fa-sliders-h text-yellow-300"></i>
-                                重み設定
-                            </h3>
-                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-1 xl:grid-cols-2 gap-2">
-                                <WeightSlider
-                                    id="weight0"
-                                    label="距離 (+)"
-                                    value={weights.weight0}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight0: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight1"
-                                    label="勾配 (+)"
-                                    value={weights.weight1}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight1: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight4"
-                                    label="歩道 (-)"
-                                    value={weights.weight4}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight4: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight5"
-                                    label="信号 (+)"
-                                    value={weights.weight5}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight5: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight6"
-                                    label="道路幅 (+)"
-                                    value={weights.weight6}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight6: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight7"
-                                    label="照明 (-)"
-                                    value={weights.weight7}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight7: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight8"
-                                    label="自然 (-)"
-                                    value={weights.weight8}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight8: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight9"
-                                    label="公園 (-)"
-                                    value={weights.weight9}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) => setWeights({ ...weights, weight9: value })}
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight10"
-                                    label="ごみ集積場 (+)"
-                                    value={weights.weight10}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) =>
-                                        setWeights({ ...weights, weight10: value })
-                                    }
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight11"
-                                    label="公衆トイレ (-)"
-                                    value={weights.weight11}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) =>
-                                        setWeights({ ...weights, weight11: value })
-                                    }
-                                    disabled={isLoading}
-                                />
-                                <WeightSlider
-                                    id="weight12"
-                                    label="横断歩道 (-)"
-                                    value={weights.weight12}
-                                    min={-100}
-                                    max={100}
-                                    step={0.1}
-                                    onChange={(value) =>
-                                        setWeights({ ...weights, weight12: value })
-                                    }
-                                    disabled={isLoading}
-                                />
                             </div>
                         </div>
                     </div>
