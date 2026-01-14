@@ -360,10 +360,7 @@ export default function MapComponent({
     }, [routeLayers.length]);
 
     return (
-        <div
-            className="bg-white rounded-2xl overflow-hidden card-shadow mb-3"
-            style={{ height: '500px', minHeight: '500px' }}
-        >
+        <div className="bg-white rounded-2xl overflow-hidden card-shadow mb-3 h-[55vh] min-h-[320px] sm:h-[60vh] lg:h-[500px]">
             <MapContainer
                 center={[35.95017, 139.64735]}
                 zoom={15}
@@ -516,7 +513,6 @@ export default function MapComponent({
                 ))}
                 {startMarker && (
                     <AutoOpenStartMarker
-                        key={`start-${startMarker.nodeId}-${startMarker.position[0]}-${startMarker.position[1]}`}
                         position={startMarker.position}
                         icon={getBlueIcon()}
                         startNode={startMarker.startNode}
@@ -525,7 +521,6 @@ export default function MapComponent({
                 )}
                 {endMarker && (
                     <EndMarker
-                        key={`end-${endMarker.nodeId}-${endMarker.position[0]}-${endMarker.position[1]}`}
                         position={endMarker.position}
                         icon={getRedIcon()}
                         nodeId={endMarker.nodeId}

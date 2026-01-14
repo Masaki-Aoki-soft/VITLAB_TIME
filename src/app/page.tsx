@@ -2195,17 +2195,17 @@ export default function Home() {
     return (
         <div className="gradient-bg min-h-screen">
             <div
-                className={`min-h-screen p-4 ${isLoading ? 'pointer-events-none opacity-50' : ''}`}
+                className={`min-h-screen p-3 sm:p-4 ${isLoading ? 'pointer-events-none opacity-50' : ''}`}
             >
-                <div className="max-w-8xl mx-auto space-y-6">
+                <div className="max-w-8xl mx-auto space-y-4 sm:space-y-6">
                     {/* 表示データと経路情報 */}
-                    <div className="grid grid-cols-5 gap-4">
-                        <div className="col-span-2 glass-effect rounded-xl p-6">
+                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-4">
+                        <div className="lg:col-span-2 glass-effect rounded-xl p-4 sm:p-6">
                             <h3 className="text-white font-semibold text-lg mb-4 flex items-center gap-2">
                                 <i className="fas fa-eye text-yellow-300"></i>
                                 表示データ
                             </h3>
-                            <div className="grid grid-cols-6 gap-2 auto-rows-fr">
+                            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-2 auto-rows-fr">
                                 <button
                                     onClick={viewAREA}
                                     disabled={isLoading}
@@ -2292,7 +2292,7 @@ export default function Home() {
                                 </button>
                             </div>
                         </div>
-                        <div className="col-span-3 flex flex-col">
+                        <div className="lg:col-span-3 flex flex-col">
                             <div className="glass-effect rounded-xl p-4 flex-grow">
                                 <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
                                     <i className="fas fa-info-circle text-yellow-300"></i>
@@ -2313,7 +2313,7 @@ export default function Home() {
                         {/* 左側パネル */}
                         <div className="lg:col-span-3 flex flex-col gap-6">
                             {/* 地点設定 */}
-                            <div className="glass-effect rounded-xl p-6">
+                            <div className="glass-effect rounded-xl p-4 sm:p-6">
                                 <h3 className="text-white font-semibold text-lg mb-4 flex items-center gap-2">
                                     <i className="fas fa-map-marker-alt text-yellow-300"></i>
                                     地点設定
@@ -2339,7 +2339,7 @@ export default function Home() {
                                                 '終点を選択してください'}
                                         </div>
                                     )}
-                                    <div className="space-x-2 flex">
+                                    <div className="flex flex-col sm:flex-row sm:gap-2 gap-3">
                                         <div>
                                             <label className="block text-white/90 text-sm font-medium mb-2">
                                                 <i className="fas fa-play text-green-400 mr-1"></i>
@@ -2377,7 +2377,7 @@ export default function Home() {
                             </div>
 
                             {/* 歩行速度設定 */}
-                            <div className="glass-effect rounded-xl p-6">
+                            <div className="glass-effect rounded-xl p-4 sm:p-6">
                                 <h3 className="text-white font-semibold text-lg mb-4 flex items-center gap-2">
                                     <i className="fas fa-walking text-yellow-300"></i>
                                     歩行速度設定
