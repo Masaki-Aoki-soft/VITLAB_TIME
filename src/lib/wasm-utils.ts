@@ -44,9 +44,13 @@ export async function runUp44(args: string[]): Promise<void> {
 export async function runYen(
     startNode: number,
     endNode: number,
-    walkingSpeed: number
+    walkingSpeed: number,
+    kGradient?: number
 ): Promise<string> {
     const args = [startNode.toString(), endNode.toString(), walkingSpeed.toString()];
+    if (kGradient !== undefined) {
+        args.push(kGradient.toString());
+    }
     return await runCBinary('yens_algorithm', args);
 }
 

@@ -8,7 +8,7 @@ import dynamicImport from 'next/dynamic';
 import toast from 'react-hot-toast';
 import RouteInfo from '@/components/RouteInfo';
 import WeightSlider from '@/components/WeightSlider';
-import { RouteInfo as RouteInfoType, RouteResult, CSVRow } from '@/lib/types';
+import { RouteInfo as RouteInfoType, RouteResult, CSVRow, SignalInfo } from '@/lib/types';
 import { client } from '@/lib/HonoClient';
 
 // Leafletマップコンポーネントを動的インポート（SSRを無効化）
@@ -24,6 +24,8 @@ export default function Home() {
     const [savedRoute, setSavedRoute] = useState<RouteInfoType | null>(null);
     const [bestEnumRoute, setBestEnumRoute] = useState<RouteInfoType | null>(null);
     const [routeData, setRouteData] = useState<CSVRow[]>([]);
+    const [signalData, setSignalData] = useState<SignalInfo[]>([]);
+    const [purpleRoute, setPurpleRoute] = useState<RouteInfoType | null>(null);
     const [foundRoutes, setFoundRoutes] = useState<RouteResult[]>([]);
     const [currentRouteIndex, setCurrentRouteIndex] = useState(0);
     const [savedRoutesList, setSavedRoutesList] = useState<string[]>([]);
@@ -114,6 +116,29 @@ export default function Home() {
             return parsed.data;
         } catch (error) {
             console.error('CSVデータのロードに失敗:', error);
+            return [];
+        }
+    };
+
+    // 信号データの読み込み
+    const loadSignalData = async () => {
+        if (signalData.length > 0) return signalData;
+        try {
+            // PapaParseを動的にインポート
+            const PapaModule = await import('papaparse');
+            const Papa = PapaModule.default;
+
+            const response = await client.api.main_server_route.signalData.$get();
+            const csvText = await response.text();
+            const parsed = Papa.parse<SignalInfo>(csvText, {
+                header: true,
+                dynamicTyping: true,
+                skipEmptyLines: true,
+            });
+            setSignalData(parsed.data);
+            return parsed.data;
+        } catch (error) {
+            console.error('信号データのロードに失敗:', error);
             return [];
         }
     };
@@ -613,6 +638,7 @@ export default function Home() {
         setRoute1(null);
         setRoute2(null);
         setSavedRoute(null);
+        setPurpleRoute(null);
         setBestEnumRoute(null);
         setFoundRoutes([]);
         setCurrentRouteIndex(0);
@@ -703,6 +729,7 @@ export default function Home() {
             }
         });
         routeLayersRef.current.clear();
+        setPurpleRoute(null);
 
         // 後方互換性のため
         if (slider194_195RouteLayerRef.current) {
@@ -798,6 +825,10 @@ export default function Home() {
             }, 100);
             return;
         }
+
+        // CSVデータのロードを確実に行う
+        await loadCSVData();
+        await loadSignalData();
         slider194_195CreatingRef.current = true;
 
         try {
@@ -1982,27 +2013,55 @@ export default function Home() {
                 }
             });
 
-            // テキストファイルを読み込む
-            const textFilePath = `/api/main_server_route/static/${directory}/${fileName}`;
-            console.log(`[テキストファイル読み込み] ${textFilePath}`);
-            const textResponse = await fetch(textFilePath);
-            if (!textResponse.ok) {
+            // CSVファイルを読み込む
+            const fileName = `${fileNumber}.csv`;
+            const csvFilePath = `/api/main_server_route/static/${directory}/${fileName}`;
+            console.log(`[CSVファイル読み込み] ${csvFilePath}`);
+            const csvResponse = await fetch(csvFilePath);
+            if (!csvResponse.ok) {
                 let errorData: any = {};
                 try {
-                    errorData = await textResponse.json();
+                    errorData = await csvResponse.json();
                 } catch {
-                    errorData = { error: await textResponse.text().catch(() => '') };
+                    errorData = { error: await csvResponse.text().catch(() => '') };
                 }
                 console.error(
-                    `ファイルが見つかりません: ${textFilePath}, status: ${textResponse.status}`,
+                    `ファイルが見つかりません: ${csvFilePath}, status: ${csvResponse.status}`,
                     errorData
                 );
                 return;
             }
 
-            const textContent = await textResponse.text();
-            console.log(`[テキスト内容] ${textContent.substring(0, 100)}...`);
-            const allGeojsonFileNames = textContent
+            const csvText = await csvResponse.text();
+            
+            // PapaParseを動的にインポート
+            const PapaModule = await import('papaparse');
+            const Papa = PapaModule.default;
+            
+            const parsed = Papa.parse(csvText, {
+                header: false,
+                skipEmptyLines: true,
+            });
+
+            if (parsed.errors.length > 0) {
+                console.error('CSV parse error:', parsed.errors);
+                return;
+            }
+
+            const row = parsed.data[0] as string[];
+            if (!row || row.length < 4) {
+                console.warn('Invalid CSV format');
+                return;
+            }
+
+            const content = row[0];
+            const dist = parseFloat(row[1]);
+            const walkTime = parseFloat(row[2]);
+            const waitTime = parseFloat(row[3]); // seconds
+
+            console.log(`[CSV内容] dist: ${dist}, walkTime: ${walkTime}, waitTime: ${waitTime}`);
+
+            const allGeojsonFileNames = content
                 .split('\n')
                 .map((line) => line.trim())
                 .filter((line) => line !== '' && line.endsWith('.geojson'));
@@ -2023,27 +2082,16 @@ export default function Home() {
             for (const geojsonFileName of geojsonFileNames) {
                 try {
                     const geojsonPath = `/api/main_server_route/static/${geojsonFolder}${geojsonFileName}`;
-                    console.log(`[GeoJSON読み込み] ${geojsonPath}`);
+                    // console.log(`[GeoJSON読み込み] ${geojsonPath}`);
                     const geojsonResponse = await fetch(geojsonPath);
                     if (!geojsonResponse.ok) {
-                        const errorData = await geojsonResponse
-                            .json()
-                            .catch(() => ({ error: 'Unknown error' }));
-                        console.warn(
-                            `GeoJSONファイルが見つかりません: ${geojsonPath}, status: ${geojsonResponse.status}`,
-                            errorData
-                        );
                         continue;
                     }
                     const geojsonData = await geojsonResponse.json();
                     if (geojsonData.type === 'Feature') {
                         geojsonFeatures.push(geojsonData);
-                        console.log(`[GeoJSON追加] ${geojsonFileName} (Feature)`);
                     } else if (geojsonData.type === 'FeatureCollection') {
                         geojsonFeatures.push(...geojsonData.features);
-                        console.log(
-                            `[GeoJSON追加] ${geojsonFileName} (FeatureCollection, ${geojsonData.features.length} features)`
-                        );
                     }
                 } catch (err) {
                     console.warn(`Error loading ${geojsonFileName}:`, err);
@@ -2051,6 +2099,23 @@ export default function Home() {
             }
 
             console.log(`[読み込んだFeature数] ${geojsonFeatures.length}個`);
+
+            // 紫色の経路の情報を設定
+            const totalTimeMinutes = walkTime + waitTime / 60;
+
+            setPurpleRoute({
+                totalDistance: dist,
+                totalTime: totalTimeMinutes,
+                totalWaitTime: waitTime / 60, // 分単位で保存
+            });
+
+            console.log(
+                `[紫色の経路情報] 距離: ${dist.toFixed(
+                    1
+                )}m, 待ち時間: ${waitTime.toFixed(1)}秒, 総時間: ${totalTimeMinutes.toFixed(
+                    2
+                )}分`
+            );
 
             if (geojsonFeatures.length > 0) {
                 // 念のため、既存のレイヤーが残っていないか再度確認して削除
@@ -2165,6 +2230,7 @@ export default function Home() {
     // 初期化
     useEffect(() => {
         loadCSVData();
+        loadSignalData();
         loadSavedRoutesList();
 
         // ノードGeoJSONをロード
@@ -2303,6 +2369,7 @@ export default function Home() {
                                     route2={route2}
                                     savedRoute={savedRoute}
                                     bestEnumRoute={bestEnumRoute}
+                                    purpleRoute={purpleRoute}
                                 />
                             </div>
                         </div>
@@ -2494,6 +2561,165 @@ export default function Home() {
                                         className="w-full bg-yellow-500 hover:bg-yellow-600 text-white text-sm py-2 rounded-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                                     >
                                         <i className="fas fa-route"></i>全経路を表示
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            if (!foundRoutes || foundRoutes.length === 0) {
+                                                toast.error('まず「経路を検索」してください。');
+                                                return;
+                                            }
+
+                                            // routeType=0（青色、基準時刻2）のみを抽出
+                                            const blueRoute = foundRoutes.find((route) => route.routeType === 0);
+
+                                            if (!blueRoute) {
+                                                toast.error('待ち無し経路（青色）が見つかりませんでした。');
+                                                return;
+                                            }
+
+                                            setIsLoading(true);
+                                            try {
+                                                // 既存の表示をクリア（routeDataなどは保持）
+                                                setRouteLayers([]);
+                                                otherLayersRef.current.forEach((layer) => {
+                                                    if (mapRef.current) {
+                                                        mapRef.current.removeLayer(layer);
+                                                    }
+                                                });
+                                                otherLayersRef.current = [];
+                                                
+                                                // 経路情報の表示状態を更新（青色のみ表示）
+                                                setRoute1(null); // 緑
+                                                setBestEnumRoute(null); // 赤
+                                                setRoute2({ // 青
+                                                    totalDistance: blueRoute.totalDistance,
+                                                    totalTime: blueRoute.totalTime,
+                                                    totalWaitTime: blueRoute.totalWaitTime || 0,
+                                                    totalGradientDiff: blueRoute.totalGradientDiff, // 勾配影響時間を渡す
+                                                });
+                                                setSavedRoute(null);
+                                                setPurpleRoute(null);
+
+                                                // 青色の経路を描画
+                                                const geojsonFolder = 'oomiya_line/';
+                                                const blueColor = '#3742fa';
+                                                const newLayers: Array<{ data: any; style: any; routeInfo?: RouteResult }> = [];
+
+                                                const segments = blueRoute.userPref
+                                                    .split('\n')
+                                                    .filter((line) => line.trim() !== '');
+                                                
+                                                for (const filename of segments) {
+                                                    try {
+                                                        const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
+                                                        const response = await fetch(filePath);
+                                                        if (!response.ok) continue;
+                                                        const data = await response.json();
+                                                        newLayers.push({
+                                                            data,
+                                                            style: {
+                                                                color: blueColor,
+                                                                weight: 8,
+                                                                opacity: 0.8,
+                                                            },
+                                                            routeInfo: blueRoute,
+                                                        });
+                                                    } catch (err) {
+                                                        console.warn(`Error loading ${filename}:`, err);
+                                                    }
+                                                }
+                                                setRouteLayers(newLayers);
+                                                toast.success('待ち無し経路（青色）のみを表示しました');
+                                            } catch (error: any) {
+                                                console.error('待ち無し経路の表示中にエラー:', error);
+                                                toast.error('エラーが発生しました');
+                                            } finally {
+                                                setIsLoading(false);
+                                            }
+                                        }}
+                                        disabled={isLoading}
+                                        className="w-full bg-blue-500 hover:bg-blue-600 text-white text-sm py-2 rounded-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <i className="fas fa-search-location"></i>待ち無し検索
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            if (!foundRoutes || foundRoutes.length === 0) {
+                                                toast.error('まず「経路を検索」してください。');
+                                                return;
+                                            }
+
+                                            // routeType=1（緑色、基準時刻1）のみを抽出
+                                            const greenRoute = foundRoutes.find((route) => route.routeType === 1);
+
+                                            if (!greenRoute) {
+                                                toast.error('信号回避経路（緑色）が見つかりませんでした。');
+                                                return;
+                                            }
+
+                                            setIsLoading(true);
+                                            try {
+                                                // 既存の表示をクリア
+                                                setRouteLayers([]);
+                                                otherLayersRef.current.forEach((layer) => {
+                                                    if (mapRef.current) {
+                                                        mapRef.current.removeLayer(layer);
+                                                    }
+                                                });
+                                                otherLayersRef.current = [];
+                                                
+                                                // 経路情報の表示状態を更新（緑色のみ表示）
+                                                setRoute1({ // 緑
+                                                    totalDistance: greenRoute.totalDistance,
+                                                    totalTime: greenRoute.totalTime,
+                                                    totalWaitTime: greenRoute.totalWaitTime || 0,
+                                                });
+                                                setBestEnumRoute(null); // 赤
+                                                setRoute2(null); // 青
+                                                setSavedRoute(null);
+                                                setPurpleRoute(null);
+
+                                                // 緑色の経路を描画
+                                                const geojsonFolder = 'oomiya_line/';
+                                                const greenColor = '#2ed573';
+                                                const newLayers: Array<{ data: any; style: any; routeInfo?: RouteResult }> = [];
+
+                                                const segments = greenRoute.userPref
+                                                    .split('\n')
+                                                    .filter((line) => line.trim() !== '');
+                                                
+                                                for (const filename of segments) {
+                                                    try {
+                                                        const filePath = `/api/main_server_route/static/${geojsonFolder}${filename.trim()}`;
+                                                        const response = await fetch(filePath);
+                                                        if (!response.ok) continue;
+                                                        const data = await response.json();
+                                                        newLayers.push({
+                                                            data,
+                                                            style: {
+                                                                color: greenColor,
+                                                                weight: 8,
+                                                                opacity: 0.8,
+                                                            },
+                                                            routeInfo: greenRoute,
+                                                        });
+                                                    } catch (err) {
+                                                        console.warn(`Error loading ${filename}:`, err);
+                                                    }
+                                                }
+                                                setRouteLayers(newLayers);
+                                                toast.success('信号回避経路（緑色）のみを表示しました');
+                                            } catch (error: any) {
+                                                console.error('信号回避経路の表示中にエラー:', error);
+                                                toast.error('エラーが発生しました');
+                                            } finally {
+                                                setIsLoading(false);
+                                            }
+                                        }}
+                                        disabled={isLoading}
+                                        className="w-full bg-green-500 hover:bg-green-600 text-white text-sm py-2 rounded-lg transition-all duration-200 hover:scale-105 flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        <i className="fas fa-traffic-light"></i>信号回避検索
                                     </button>
                                     <button
                                         onClick={clearGeoJSON}

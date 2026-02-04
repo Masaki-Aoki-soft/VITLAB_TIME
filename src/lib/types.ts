@@ -2,6 +2,7 @@ export interface RouteInfo {
     totalDistance: number;
     totalTime: number;
     totalWaitTime?: number;
+    totalGradientDiff?: number;
 }
 
 export interface Route {
@@ -18,6 +19,7 @@ export interface RouteResult {
     routeType?: number;  // 0: 基準時刻2（青）, 1: 基準時刻1（緑）, 2: 最短全網羅（赤）, 3: 全網羅経路（黄）
     hasSignal?: number;  // 0: 信号なし, 1: 信号あり
     signalEdgeIdx?: number;  // 信号エッジのインデックス
+    totalGradientDiff?: number;
 }
 
 export interface CSVRow {
@@ -25,4 +27,13 @@ export interface CSVRow {
     node2: number;
     distance: number;
     [key: string]: any;
+}
+
+export interface SignalInfo {
+    node1: number;
+    node2: number;
+    cycle: number;
+    green: number;
+    phase: number;
+    expected: number;
 }
