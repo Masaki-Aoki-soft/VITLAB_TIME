@@ -11,14 +11,11 @@ import { execSync } from 'child_process';
  */
 async function runCBinary(binaryPath: string, args: string[]): Promise<string> {
     const projectRoot = process.cwd();
-    const fullPath = path.join(projectRoot, binaryPath);
-
-    if (!fs.existsSync(fullPath)) {
-        throw new Error(`バイナリファイルが見つかりません: ${fullPath}`);
-    }
+    // Docker環境での実行を前提とするため、OS判定やWSLコマンドは不要
+    // 単純に相対パスで実行する
+    const command = `./${binaryPath} ${args.join(' ')}`;
 
     try {
-        const command = `./${binaryPath} ${args.join(' ')}`;
         const output = execSync(command, {
             encoding: 'utf8',
             cwd: projectRoot,
@@ -39,7 +36,7 @@ export async function runUp44(args: string[]): Promise<void> {
 }
 
 /**
- * yens_algorithmバイナリを実行
+ * yenバイナリを実行
  */
 export async function runYen(
     startNode: number,
@@ -47,24 +44,15 @@ export async function runYen(
     walkingSpeed: number,
     kGradient?: number
 ): Promise<string> {
+    // バイナリは3つの引数のみ受け付ける: start_node, end_node, walking_speed
     const args = [startNode.toString(), endNode.toString(), walkingSpeed.toString()];
-    if (kGradient !== undefined) {
-        args.push(kGradient.toString());
-    }
-    return await runCBinary('yens_algorithm', args);
+    return await runCBinary('yen', args);
 }
 
 /**
  * signalバイナリを実行
  */
 export async function runSignal(referenceEdge: string, walkingSpeed: number): Promise<string> {
-    const projectRoot = process.cwd();
-    const binaryFullPath = path.join(projectRoot, 'signal');
-
-    if (!fs.existsSync(binaryFullPath)) {
-        throw new Error(`signalバイナリが見つかりません`);
-    }
-
     const args = [referenceEdge, walkingSpeed.toString()];
     return await runCBinary('signal', args);
 }
