@@ -1,7 +1,7 @@
 /* コストと信号まの待ち時間を計算するAPI */
 
 import { Hono } from 'hono';
-import { runUp44, runYen } from '@/lib/wasm-utils';
+import { runUp44, runYen } from '@/lib/exec-utils';
 import fs from 'fs';
 import path from 'path';
 

@@ -21,9 +21,9 @@ COPY . .
 # C言語のソースコードをコンパイルして実行ファイルを作成
 RUN gcc spfa.c -o spfa21 && \
     gcc user_preference_speed.c -o up44 -lm && \
-    gcc yens_algorithm.c -o yens_algorithm -lm -std=c99 && \
+    gcc yens_algorithm.c -o yen -lm -std=c99 && \
     gcc calculate_wait_time.c -o signal -lm -std=c99 && \
-    chmod +x spfa21 up44 yens_algorithm signal
+    chmod +x spfa21 up44 yen signal
 
 # Next.jsアプリケーションをビルド
 RUN npm run build
@@ -53,7 +53,7 @@ RUN mkdir -p ./public
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 # Cプログラムの実行ファイルをコピー
-COPY --from=builder --chown=nextjs:nodejs /app/spfa21 /app/up44 /app/yens_algorithm /app/signal ./
+COPY --from=builder --chown=nextjs:nodejs /app/spfa21 /app/up44 /app/yen /app/signal ./
 
 # データファイルをコピー（必要に応じて）
 COPY --from=builder --chown=nextjs:nodejs /app/oomiya_line ./oomiya_line
